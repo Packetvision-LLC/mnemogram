@@ -86,6 +86,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let memory_user_id = memory_item
         .get("userId")
         .and_then(|v| v.as_s().ok())
+        .map(|s| s.as_str())
         .unwrap_or("");
     
     if memory_user_id != user_id {
@@ -103,12 +104,15 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let s3_key = memory_item
         .get("s3Key")
         .and_then(|v| v.as_s().ok())
+        .map(|s| s.as_str())
         .unwrap_or("");
 
+    let default_bucket = std::env::var("MEMORY_BUCKET").unwrap_or_default();
     let s3_bucket = memory_item
         .get("s3Bucket")
         .and_then(|v| v.as_s().ok())
-        .unwrap_or_else(|| std::env::var("MEMORY_BUCKET").unwrap_or_default().as_str());
+        .map(|s| s.as_str())
+        .unwrap_or(&default_bucket);
 
     // TODO: Download .mv2 file from S3 and use memvid-core to search
     // For now, return mock search results

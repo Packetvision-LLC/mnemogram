@@ -206,6 +206,7 @@ async fn handle_subscription_updated(
         .first()
         .and_then(|item| item.price.metadata.as_ref())
         .and_then(|m| m.get("planId"))
+        .map(|s| s.as_str())
         .unwrap_or("unknown");
 
     let current_period_end = DateTime::from_timestamp(subscription.current_period_end, 0)

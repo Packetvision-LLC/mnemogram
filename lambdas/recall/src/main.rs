@@ -11,7 +11,7 @@ struct RecallRequest {
     query: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct RecallResult {
     #[serde(rename = "memoryId")]
     memory_id: String,
@@ -42,17 +42,20 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
 
-    // Extract user ID from authorizer context
+    // Extract user ID from authorizer context or headers
     let user_id = event
         .headers()
         .get("x-user-id")
         .and_then(|v| v.to_str().ok())
         .or_else(|| {
-            event
-                .request_context()
-                .authorizer()
-                .get("userId")
-                .and_then(|v| v.as_str())
+            // Try to get from request context if available
+            if let Some(_context) = event.request_context().authorizer() {
+                // Note: We'll need to implement proper authorizer context parsing
+                // For now, just use a placeholder
+                None
+            } else {
+                None
+            }
         })
         .unwrap_or("anonymous");
 
@@ -120,16 +123,19 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             let memory_id = item
                 .get("memoryId")
                 .and_then(|v| v.as_s().ok())
+                .map(|s| s.as_str())
                 .unwrap_or("unknown");
 
             let memory_name = item
                 .get("name")
                 .and_then(|v| v.as_s().ok())
+                .map(|s| s.as_str())
                 .unwrap_or("Unnamed Memory");
 
             let created_at = item
                 .get("createdAt")
                 .and_then(|v| v.as_s().ok())
+                .map(|s| s.as_str())
                 .unwrap_or("unknown");
 
             // TODO: Implement actual search using memvid integration

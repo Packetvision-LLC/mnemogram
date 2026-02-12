@@ -15,12 +15,11 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let s3_client = s3::Client::new(&config);
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
 
-    // Extract user ID from headers or query params (set by authorizer)
+    // Extract user ID from headers (set by authorizer)
     let user_id = event
         .headers()
         .get("x-user-id")
         .and_then(|v| v.to_str().ok())
-        .or_else(|| event.query_string_parameters().first("userId"))
         .unwrap_or("anonymous");
 
     // Generate a unique memory ID

@@ -165,7 +165,7 @@ async fn validate_api_key(
     let key_hash = format!("hash_{}", hasher.finish());
     
     let key = HashMap::from([
-        ("keyId".to_string(), AttributeValue::S(key_hash)),
+        ("keyId".to_string(), AttributeValue::S(key_hash.clone())),
     ]);
 
     let result = client

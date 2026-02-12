@@ -137,15 +137,23 @@ export class MnemogramStack extends cdk.Stack {
       description: "Health check endpoint",
     });
 
-    // Ingest
+    // Ingest (new POST /memories for S3 pre-signed URL flow)
     const ingestFn = new lambda.Function(this, "IngestFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-ingest",
-      code: lambda.Code.fromAsset("../lambdas/target/lambda/api-ingest"),
-      description: "Ingest content into .mv2 memory files",
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/ingest"),
+      description: "Ingest memory metadata and generate S3 upload URL",
     });
 
-    // Search
+    // Search within a memory (new POST /memories/{id}/search)
+    const searchMemoryFn = new lambda.Function(this, "SearchMemoryFn", {
+      ...lambdaDefaults,
+      functionName: "mnemogram-search-memory",
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/search"),
+      description: "Search within a specific memory",
+    });
+
+    // Search (existing GET /search endpoint for backward compatibility)
     const searchFn = new lambda.Function(this, "SearchFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-search",
@@ -169,12 +177,12 @@ export class MnemogramStack extends cdk.Stack {
       description: "CRUD for memory files",
     });
 
-    // Authorizer
+    // Authorizer (updated)
     const authorizerFn = new lambda.Function(this, "AuthorizerFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-authorizer",
       code: lambda.Code.fromAsset("../lambdas/target/lambda/authorizer"),
-      description: "JWT custom authorizer",
+      description: "JWT/API key custom authorizer",
     });
 
     // Stripe webhook handler
@@ -193,18 +201,24 @@ export class MnemogramStack extends cdk.Stack {
     // Grant permissions
     memoryBucket.grantRead(searchFn);
     memoryBucket.grantRead(recallFn);
+    memoryBucket.grantRead(searchMemoryFn);
     memoryBucket.grantReadWrite(ingestFn);
     memoryBucket.grantReadWrite(manageFn);
     metadataTable.grantReadWriteData(ingestFn);
     metadataTable.grantReadData(searchFn);
     metadataTable.grantReadData(recallFn);
+    metadataTable.grantReadData(searchMemoryFn);
     metadataTable.grantReadWriteData(manageFn);
     
     // Grant memories table permissions
     memoriesTable.grantReadWriteData(ingestFn);
     memoriesTable.grantReadData(searchFn);
     memoriesTable.grantReadData(recallFn);
+    memoriesTable.grantReadData(searchMemoryFn);
     memoriesTable.grantReadWriteData(manageFn);
+    
+    // Grant API keys table access to authorizer
+    apiKeysTable.grantReadData(authorizerFn);
     
     // Grant DynamoDB permissions for new tables
     subscriptionsTable.grantReadWriteData(stripeWebhookFn);
@@ -214,6 +228,7 @@ export class MnemogramStack extends cdk.Stack {
     usageTable.grantReadWriteData(ingestFn);
     usageTable.grantReadWriteData(searchFn);
     usageTable.grantReadWriteData(recallFn);
+    usageTable.grantReadWriteData(searchMemoryFn);
 
     // ── API Gateway ──────────────────────────────────────────────────
 
@@ -245,22 +260,45 @@ export class MnemogramStack extends cdk.Stack {
     );
 
     const memoriesResource = api.root.addResource("memories");
+    
+    // POST /memories - Create memory and get upload URL
     memoriesResource.addMethod(
-      "PUT",
+      "POST",
       new apigateway.LambdaIntegration(ingestFn),
       { authorizer }
     );
+    
+    // GET /memories - List user's memories
     memoriesResource.addMethod(
       "GET",
       new apigateway.LambdaIntegration(manageFn),
       { authorizer }
     );
+    
+    // PUT /memories - Update existing memory (upload content)
+    memoriesResource.addMethod(
+      "PUT",
+      new apigateway.LambdaIntegration(ingestFn),
+      { authorizer }
+    );
+    
+    // DELETE /memories - Delete memory
     memoriesResource.addMethod(
       "DELETE",
       new apigateway.LambdaIntegration(manageFn),
       { authorizer }
     );
 
+    // POST /memories/{id}/search - Search within specific memory
+    const memoryIdResource = memoriesResource.addResource("{id}");
+    const memorySearchResource = memoryIdResource.addResource("search");
+    memorySearchResource.addMethod(
+      "POST",
+      new apigateway.LambdaIntegration(searchMemoryFn),
+      { authorizer }
+    );
+
+    // GET /search - Search across memories (existing API)
     const searchResource = api.root.addResource("search");
     searchResource.addMethod(
       "GET",
@@ -268,7 +306,15 @@ export class MnemogramStack extends cdk.Stack {
       { authorizer }
     );
 
+    // POST /recall - Recall across all memories
     const recallResource = api.root.addResource("recall");
+    recallResource.addMethod(
+      "POST",
+      new apigateway.LambdaIntegration(recallFn),
+      { authorizer }
+    );
+    
+    // GET /recall - Recall across all memories (existing API)
     recallResource.addMethod(
       "GET",
       new apigateway.LambdaIntegration(recallFn),
