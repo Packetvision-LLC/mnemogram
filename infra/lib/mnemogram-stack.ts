@@ -9,6 +9,8 @@ import * as cloudwatchActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as snsSubscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as backup from "aws-cdk-lib/aws-backup";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as events from "aws-cdk-lib/aws-events";
 import { Construct } from "constructs";
 
 export interface MnemogramStackProps extends cdk.StackProps {
@@ -709,6 +711,69 @@ export class MnemogramStack extends cdk.Stack {
         height: 6,
       })
     );
+
+    // ── AWS Backup ──────────────────────────────────────────────────
+
+    // Create backup vault
+    const backupVault = new backup.BackupVault(this, "MnemogramBackupVault", {
+      backupVaultName: `mnemogram-${stage}-backup-vault`,
+      encryptionKey: undefined, // Use default AWS managed key
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Create backup plan for daily DynamoDB backups
+    const backupPlan = new backup.BackupPlan(this, "MnemogramBackupPlan", {
+      backupPlanName: `mnemogram-${stage}-backup-plan`,
+      backupVault,
+      backupPlanRules: [
+        {
+          ruleName: "DailyBackups",
+          scheduleExpression: events.Schedule.cron({
+            minute: "0",
+            hour: "2", // 2 AM UTC
+          }),
+          deleteAfter: cdk.Duration.days(30), // Keep backups for 30 days
+          startWindow: cdk.Duration.hours(1),
+          completionWindow: cdk.Duration.hours(8),
+        },
+      ],
+    });
+
+    // Create backup role with necessary permissions
+    const backupRole = new iam.Role(this, "BackupRole", {
+      roleName: `mnemogram-${stage}-backup-role`,
+      assumedBy: new iam.ServicePrincipal("backup.amazonaws.com"),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBackupServiceRolePolicyForBackup"),
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBackupServiceRolePolicyForRestores"),
+      ],
+    });
+
+    // Add all DynamoDB tables to backup selection
+    backupPlan.addSelection("DynamoDBBackupSelection", {
+      selectionName: `mnemogram-${stage}-dynamodb-selection`,
+      role: backupRole,
+      resources: [
+        backup.BackupResource.fromDynamoDbTable(metadataTable),
+        backup.BackupResource.fromDynamoDbTable(memoriesTable),
+        backup.BackupResource.fromDynamoDbTable(subscriptionsTable),
+        backup.BackupResource.fromDynamoDbTable(apiKeysTable),
+        backup.BackupResource.fromDynamoDbTable(usageTable),
+      ],
+      conditions: {
+        stringEquals: {
+          "aws:ResourceTag/BackupEnabled": "true",
+        },
+      },
+    });
+
+    // Tag all tables to include them in backup
+    const backupTag = { BackupEnabled: "true" };
+    cdk.Tags.of(metadataTable).add("BackupEnabled", "true");
+    cdk.Tags.of(memoriesTable).add("BackupEnabled", "true");
+    cdk.Tags.of(subscriptionsTable).add("BackupEnabled", "true");
+    cdk.Tags.of(apiKeysTable).add("BackupEnabled", "true");
+    cdk.Tags.of(usageTable).add("BackupEnabled", "true");
 
     // ── Outputs ──────────────────────────────────────────────────────
 
