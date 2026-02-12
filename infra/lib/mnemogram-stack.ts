@@ -4,6 +4,11 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cloudwatchActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as snsSubscriptions from "aws-cdk-lib/aws-sns-subscriptions";
+import * as backup from "aws-cdk-lib/aws-backup";
 import { Construct } from "constructs";
 
 export interface MnemogramStackProps extends cdk.StackProps {
@@ -579,6 +584,130 @@ export class MnemogramStack extends cdk.Stack {
           },
         ],
       }
+    );
+
+    // ── CloudWatch Monitoring ───────────────────────────────────────
+
+    // SNS topic for alarm notifications
+    const alertsTopic = new sns.Topic(this, "AlertsTopic", {
+      topicName: `mnemogram-${stage}-alerts`,
+      displayName: `Mnemogram ${stage.toUpperCase()} Alerts`,
+    });
+
+    // Subscribe placeholder email (can be updated later)
+    alertsTopic.addSubscription(new snsSubscriptions.EmailSubscription("alerts@mnemogram.com"));
+
+    // CloudWatch Alarms
+    
+    // Lambda error alarm for all functions
+    const lambdaFunctions = [statusFn, ingestFn, searchMemoryFn, searchFn, recallFn, manageFn, authorizerFn, stripeWebhookFn];
+    
+    lambdaFunctions.forEach((lambdaFunction, index) => {
+      new cloudwatch.Alarm(this, `LambdaErrorAlarm${index}`, {
+        alarmName: `${lambdaFunction.functionName}-errors`,
+        alarmDescription: `Lambda errors for ${lambdaFunction.functionName}`,
+        metric: lambdaFunction.metricErrors({
+          period: cdk.Duration.minutes(5),
+        }),
+        threshold: 5,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
+    });
+
+    // API Gateway 5xx errors
+    new cloudwatch.Alarm(this, "ApiGateway5xxAlarm", {
+      alarmName: `mnemogram-${stage}-api-5xx-errors`,
+      alarmDescription: `API Gateway 5xx errors for ${stage}`,
+      metric: new cloudwatch.Metric({
+        namespace: "AWS/ApiGateway",
+        metricName: "5XXError",
+        dimensionsMap: {
+          ApiName: api.restApiName,
+        },
+        statistic: "Sum",
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 10,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
+
+    // DynamoDB throttle alarms for all tables
+    const dynamoTables = [metadataTable, memoriesTable, subscriptionsTable, apiKeysTable, usageTable];
+    
+    dynamoTables.forEach((table, index) => {
+      new cloudwatch.Alarm(this, `DynamoThrottleAlarm${index}`, {
+        alarmName: `${table.tableName}-throttles`,
+        alarmDescription: `DynamoDB throttles for ${table.tableName}`,
+        metric: table.metricThrottledRequests({
+          period: cdk.Duration.minutes(5),
+        }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
+    });
+
+    // CloudWatch Dashboard
+    const dashboard = new cloudwatch.Dashboard(this, "MnemogramDashboard", {
+      dashboardName: `mnemogram-${stage}-dashboard`,
+    });
+
+    // Lambda metrics widgets
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: "Lambda Invocations",
+        left: lambdaFunctions.map(fn => fn.metricInvocations()),
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: "Lambda Duration",
+        left: lambdaFunctions.map(fn => fn.metricDuration()),
+        width: 12,
+        height: 6,
+      })
+    );
+
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: "Lambda Errors",
+        left: lambdaFunctions.map(fn => fn.metricErrors()),
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: "API Gateway Latency",
+        left: [
+          new cloudwatch.Metric({
+            namespace: "AWS/ApiGateway",
+            metricName: "Latency",
+            dimensionsMap: {
+              ApiName: api.restApiName,
+            },
+            statistic: "Average",
+          }),
+        ],
+        width: 12,
+        height: 6,
+      })
+    );
+
+    // DynamoDB metrics
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: "DynamoDB Consumed Read Capacity",
+        left: dynamoTables.map(table => table.metricConsumedReadCapacityUnits()),
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: "DynamoDB Consumed Write Capacity",
+        left: dynamoTables.map(table => table.metricConsumedWriteCapacityUnits()),
+        width: 12,
+        height: 6,
+      })
     );
 
     // ── Outputs ──────────────────────────────────────────────────────
