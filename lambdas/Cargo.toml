@@ -12,6 +12,7 @@ members = [
     "batch-recall",
     "ingest",
     "search",
+    "validate-upload",
 ]
 
 [workspace.dependencies]

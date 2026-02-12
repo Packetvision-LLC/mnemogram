@@ -1,14 +1,23 @@
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
+use aws_sdk_s3::Client as S3Client;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::memvid::{MemvidClient, MemvidSearchResult};
+use shared::errors::MnemogramError;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Deserialize)]
 struct SearchRequest {
     query: String,
+    #[serde(default = "default_top_k")]
+    top_k: usize,
+}
+
+fn default_top_k() -> usize {
+    10
 }
 
 #[derive(Clone, Serialize)]
@@ -21,6 +30,8 @@ struct SearchResult {
     snippet: String,
     #[serde(rename = "score")]
     score: f64,
+    #[serde(rename = "frameId")]
+    frame_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -32,12 +43,25 @@ struct SearchResponse {
     total: usize,
 }
 
+impl From<MemvidSearchResult> for SearchResult {
+    fn from(memvid_result: MemvidSearchResult) -> Self {
+        SearchResult {
+            memory_id: String::new(), // Will be set by caller
+            timestamp: memvid_result.timestamp,
+            snippet: memvid_result.snippet,
+            score: memvid_result.score,
+            frame_id: memvid_result.frame_id,
+        }
+    }
+}
+
 /// POST /memories/{id}/search - Search within a memory
 /// Accept query + memoryId
-/// Return search results (placeholder — actual memvid integration comes later)
+/// Return search results using memvid integration
 async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
+    let s3_client = S3Client::new(&config);
 
     // Extract user ID from authorizer context or headers
     let user_id = event
@@ -147,28 +171,49 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             .map_err(Box::new)?);
     }
 
-    // TODO: Implement actual search using memvid integration
-    // For now, return placeholder results
-    let placeholder_results = vec![
-        SearchResult {
-            memory_id: memory_id.to_string(),
-            timestamp: Some("00:01:23".to_string()),
-            snippet: format!("This is a placeholder result for query: '{}'", request_body.query),
-            score: 0.95,
-        },
-        SearchResult {
-            memory_id: memory_id.to_string(),
-            timestamp: Some("00:05:42".to_string()),
-            snippet: format!("Another relevant section mentioning: '{}'", request_body.query.to_lowercase()),
-            score: 0.87,
-        },
-    ];
+    // Initialize memvid client
+    let bucket = std::env::var("STORAGE_BUCKET")
+        .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
+    
+    let memvid_client = MemvidClient::new(s3_client, bucket);
+    
+    // Perform search using memvid
+    let memvid_results = match memvid_client.search(memory_id, &request_body.query, request_body.top_k).await {
+        Ok(results) => results,
+        Err(MnemogramError::S3Error(msg)) | Err(MnemogramError::ExternalService(msg)) => {
+            tracing::error!("MemVid search failed: {}", msg);
+            
+            // Fall back to placeholder for now if memvid fails
+            return Ok(Response::builder()
+                .status(503)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&json!({
+                    "error": "search_unavailable",
+                    "message": "Search service temporarily unavailable"
+                }))?))
+                .map_err(Box::new)?);
+        }
+        Err(e) => {
+            tracing::error!("Unexpected error during search: {:?}", e);
+            return Err(format!("Search failed: {:?}", e).into());
+        }
+    };
+
+    // Convert memvid results to API format
+    let results: Vec<SearchResult> = memvid_results
+        .into_iter()
+        .map(|mut result| {
+            let mut search_result = SearchResult::from(result);
+            search_result.memory_id = memory_id.to_string();
+            search_result
+        })
+        .collect();
 
     let response = SearchResponse {
         query: request_body.query,
         memory_id: memory_id.to_string(),
-        results: placeholder_results.clone(),
-        total: placeholder_results.len(),
+        results: results.clone(),
+        total: results.len(),
     };
 
     let body = serde_json::to_string(&response)?;

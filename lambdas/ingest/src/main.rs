@@ -5,6 +5,7 @@ use chrono::Utc;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::memvid::MemvidClient;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -21,12 +22,14 @@ struct IngestResponse {
     memory_id: String,
     #[serde(rename = "uploadUrl")]
     upload_url: String,
+    #[serde(rename = "expectedFormat")]
+    expected_format: String,
 }
 
 /// POST /memories - Memory ingest
 /// Accept memory name/description + S3 pre-signed URL flow
 /// Create metadata in DynamoDB memories table (memoryId, userId, name, description, s3Key, sizeBytes, createdAt)
-/// Return memoryId + pre-signed upload URL
+/// Return memoryId + pre-signed upload URL for .mv2 file
 async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let s3_client = s3::Client::new(&config);
@@ -80,9 +83,12 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Generate unique memory ID and S3 key
     let memory_id = Uuid::new_v4().to_string();
     let timestamp = Utc::now();
-    let bucket_name = std::env::var("MEMORY_BUCKET")
-        .map_err(|_| "MEMORY_BUCKET environment variable not set")?;
-    let s3_key = format!("memories/{}/{}.mv", user_id, memory_id);
+    let bucket_name = std::env::var("STORAGE_BUCKET")
+        .or_else(|_| std::env::var("MEMORY_BUCKET"))
+        .map_err(|_| "STORAGE_BUCKET or MEMORY_BUCKET environment variable not set")?;
+    
+    // Use .mv2 extension for memvid format
+    let s3_key = format!("memories/{}.mv2", memory_id);
 
     // Create metadata record in memories table
     let memories_table = std::env::var("MEMORIES_TABLE")
@@ -117,6 +123,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .put_object()
         .bucket(&bucket_name)
         .key(&s3_key)
+        .content_type("application/octet-stream")
         .presigned(
             s3::presigning::PresigningConfig::expires_in(
                 std::time::Duration::from_secs(15 * 60)
@@ -130,6 +137,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let response = IngestResponse {
         memory_id,
         upload_url,
+        expected_format: "mv2".to_string(),
     };
 
     let body = serde_json::to_string(&response)?;

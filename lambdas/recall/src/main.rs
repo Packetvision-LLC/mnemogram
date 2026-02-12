@@ -1,14 +1,23 @@
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
+use aws_sdk_s3::Client as S3Client;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::memvid::{MemvidClient, MemvidSearchResult};
+use shared::errors::MnemogramError;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Deserialize)]
 struct RecallRequest {
     query: String,
+    #[serde(default = "default_top_k")]
+    top_k: usize,
+}
+
+fn default_top_k() -> usize {
+    20
 }
 
 #[derive(Clone, Serialize)]
@@ -25,6 +34,8 @@ struct RecallResult {
     score: f64,
     #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(rename = "frameId")]
+    frame_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -34,13 +45,33 @@ struct RecallResponse {
     total: usize,
 }
 
+impl RecallResult {
+    fn from_memvid_result(
+        memvid_result: MemvidSearchResult,
+        memory_id: &str,
+        memory_name: &str,
+        created_at: &str,
+    ) -> Self {
+        RecallResult {
+            memory_id: memory_id.to_string(),
+            memory_name: memory_name.to_string(),
+            timestamp: memvid_result.timestamp,
+            snippet: memvid_result.snippet,
+            score: memvid_result.score,
+            created_at: created_at.to_string(),
+            frame_id: memvid_result.frame_id,
+        }
+    }
+}
+
 /// POST /recall - Recall across all memories
 /// Accept query
-/// Search across user's memories
-/// Return aggregated results (placeholder)
+/// Search across user's memories using memvid integration
+/// Return aggregated results
 async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
+    let s3_client = S3Client::new(&config);
 
     // Extract user ID from authorizer context or headers
     let user_id = event
@@ -91,6 +122,9 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
     
+    let bucket = std::env::var("STORAGE_BUCKET")
+        .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
+    
     // Use a query to find all memories for the user
     let key_condition = "#userId = :userId";
     let filter_condition = "#status = :status1 OR #status = :status2";
@@ -116,6 +150,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .map_err(Box::new)?;
 
     let mut all_results = Vec::new();
+    let memvid_client = MemvidClient::new(s3_client, bucket);
 
     if let Some(items) = scan_result.items {
         for item in items {
@@ -138,24 +173,34 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
                 .map(|s| s.as_str())
                 .unwrap_or("unknown");
 
-            // TODO: Implement actual search using memvid integration
-            // For now, return placeholder results for each memory
-            let memory_results = search_memory_placeholder(
-                &request_body.query,
-                memory_id,
-                memory_name,
-                created_at
-            );
+            // Search this memory using memvid
+            // Use smaller top_k per memory to stay within total limit
+            let per_memory_k = std::cmp::min(8, request_body.top_k);
             
-            all_results.extend(memory_results);
+            match memvid_client.search(memory_id, &request_body.query, per_memory_k).await {
+                Ok(memvid_results) => {
+                    let memory_results: Vec<RecallResult> = memvid_results
+                        .into_iter()
+                        .map(|result| RecallResult::from_memvid_result(
+                            result, memory_id, memory_name, created_at
+                        ))
+                        .collect();
+                    
+                    all_results.extend(memory_results);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to search memory {}: {:?}", memory_id, e);
+                    // Continue with other memories rather than failing completely
+                }
+            }
         }
     }
 
     // Sort by relevance score (descending)
     all_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Limit results to top 20
-    all_results.truncate(20);
+    // Limit results to requested top_k
+    all_results.truncate(request_body.top_k);
 
     let response = RecallResponse {
         query: request_body.query,
@@ -172,40 +217,6 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .map_err(Box::new)?;
 
     Ok(resp)
-}
-
-/// Placeholder function for searching a single memory file
-/// TODO: Replace with actual memvid-core integration
-fn search_memory_placeholder(
-    query: &str,
-    memory_id: &str,
-    memory_name: &str,
-    created_at: &str,
-) -> Vec<RecallResult> {
-    // Simulate searching within this memory
-    // In reality, this would:
-    // 1. Load the memory from S3 using memvid-core
-    // 2. Perform semantic search
-    // 3. Return ranked results with timestamps
-    
-    vec![
-        RecallResult {
-            memory_id: memory_id.to_string(),
-            memory_name: memory_name.to_string(),
-            timestamp: Some("00:02:15".to_string()),
-            snippet: format!("Relevant content about '{}' found in {}", query, memory_name),
-            score: 0.92,
-            created_at: created_at.to_string(),
-        },
-        RecallResult {
-            memory_id: memory_id.to_string(),
-            memory_name: memory_name.to_string(),
-            timestamp: Some("00:08:42".to_string()),
-            snippet: format!("Another section mentioning '{}'", query.to_lowercase()),
-            score: 0.78,
-            created_at: created_at.to_string(),
-        },
-    ]
 }
 
 #[tokio::main]
