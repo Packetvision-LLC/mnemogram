@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022"],
+    "declaration": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "esModuleInterop": true,
+    "outDir": "./cdk.out/ts",
+    "rootDir": ".",
+    "typeRoots": ["./node_modules/@types"]
+  },
+  "include": ["bin/**/*.ts", "lib/**/*.ts"],
+  "exclude": ["node_modules", "cdk.out"]
+}

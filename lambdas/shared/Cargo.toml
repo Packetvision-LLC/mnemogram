@@ -1,0 +1,15 @@
+[package]
+name = "shared"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aws-sdk-s3.workspace = true
+aws-sdk-dynamodb.workspace = true
+aws-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+jsonwebtoken.workspace = true
+uuid.workspace = true
