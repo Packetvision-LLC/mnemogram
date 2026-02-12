@@ -3,7 +3,8 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as apigateway from "aws-cdk-lib/aws-apigateway";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as cloudwatchActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as sns from "aws-cdk-lib/aws-sns";
@@ -201,7 +202,7 @@ export class MnemogramStack extends cdk.Stack {
 
     const lambdaDefaults: lambda.FunctionProps = {
       runtime: lambda.Runtime.PROVIDED_AL2023,
-      architecture: lambda.Architecture.ARM_64,
+      architecture: lambda.Architecture.ARM_64, // MNEM-150: Graviton ARM
       memorySize: 256,
       timeout: cdk.Duration.seconds(30),
       handler: "bootstrap",
@@ -242,6 +243,7 @@ export class MnemogramStack extends cdk.Stack {
       functionName: `mnemogram-${stage}-search-memory`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/search"),
       description: "Search within a specific memory",
+      ephemeralStorageSize: cdk.Size.gibibytes(1), // MNEM-151: 1GB for .mv2 caching
     });
 
     // Search (existing GET /search endpoint for backward compatibility)
@@ -250,6 +252,7 @@ export class MnemogramStack extends cdk.Stack {
       functionName: `mnemogram-${stage}-search`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-search"),
       description: "Hybrid search over memory files",
+      ephemeralStorageSize: cdk.Size.gibibytes(1), // MNEM-151: 1GB for .mv2 caching
     });
 
     // Recall
@@ -258,6 +261,7 @@ export class MnemogramStack extends cdk.Stack {
       functionName: `mnemogram-${stage}-recall`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/recall"),
       description: "Broader recall across all user memories",
+      ephemeralStorageSize: cdk.Size.gibibytes(1), // MNEM-151: 1GB for .mv2 caching
     });
 
     // Manage
@@ -321,445 +325,169 @@ export class MnemogramStack extends cdk.Stack {
     usageTable.grantReadWriteData(recallFn);
     usageTable.grantReadWriteData(searchMemoryFn);
 
-    // ── API Gateway ──────────────────────────────────────────────────
+    // ── Lambda Function URLs ────────────────────────────────────────
 
-    // ── API Gateway Access Logging ──────────────────────────────────
-
-    const apiAccessLogGroup = new logs.LogGroup(this, "ApiAccessLogGroup", {
-      logGroupName: `/aws/apigateway/mnemogram-${stage}-access-logs`,
-      retention: logs.RetentionDays.ONE_WEEK,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    // Create Function URLs for all Lambda functions
+    const statusFnUrl = statusFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // Public health check
     });
 
-    const api = new apigateway.RestApi(this, "MnemogramApi", {
-      restApiName: `mnemogram-${stage}-api`,
-      description: "Mnemogram REST API",
-      deployOptions: {
-        stageName: "v1",
-        throttlingRateLimit: 100,
-        throttlingBurstLimit: 200,
-        accessLogDestination: new apigateway.LogGroupLogDestination(apiAccessLogGroup),
-        accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields({
-          caller: false,
-          httpMethod: true,
-          ip: true,
-          protocol: true,
-          requestTime: true,
-          resourcePath: true,
-          responseLength: true,
-          status: true,
-          user: true,
-        }),
-      },
-      defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
-        allowMethods: apigateway.Cors.ALL_METHODS,
+    const ingestFnUrl = ingestFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // Auth handled in function
+      cors: {
+        allowCredentials: false,
+        allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-API-Version"],
+        allowedMethods: [lambda.HttpMethod.POST, lambda.HttpMethod.PUT, lambda.HttpMethod.OPTIONS],
+        allowedOrigins: ["*"],
+        maxAge: cdk.Duration.days(1),
       },
     });
 
-    // ── AWS WAF WebACL ──────────────────────────────────────────────
-
-    const webAcl = new wafv2.CfnWebACL(this, "MnemogramWebAcl", {
-      name: `mnemogram-${stage}-web-acl`,
-      description: "WAF rules for Mnemogram API Gateway",
-      scope: "REGIONAL",
-      defaultAction: { allow: {} },
-      visibilityConfig: {
-        sampledRequestsEnabled: true,
-        cloudWatchMetricsEnabled: true,
-        metricName: `mnemogram-${stage}-web-acl`,
+    const searchMemoryFnUrl = searchMemoryFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // Auth handled in function
+      cors: {
+        allowCredentials: false,
+        allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-API-Version"],
+        allowedMethods: [lambda.HttpMethod.POST, lambda.HttpMethod.OPTIONS],
+        allowedOrigins: ["*"],
+        maxAge: cdk.Duration.days(1),
       },
-      rules: [
-        // Rate limiting: 1000 requests per 5 min per IP
-        {
-          name: "RateLimitRule",
-          priority: 1,
-          statement: {
-            rateBasedStatement: {
-              limit: 1000,
-              aggregateKeyType: "IP",
-            },
-          },
-          action: { block: {} },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: `mnemogram-${stage}-rate-limit`,
-          },
-        },
-        // AWS managed rule: Common rule set
-        {
-          name: "AWSManagedRulesCommonRuleSet",
-          priority: 2,
-          overrideAction: { none: {} },
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: "AWS",
-              name: "AWSManagedRulesCommonRuleSet",
-              excludedRules: [], // Can add exclusions if needed
-            },
-          },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: `mnemogram-${stage}-common-rules`,
-          },
-        },
-        // AWS managed rule: Known bad inputs
-        {
-          name: "AWSManagedRulesKnownBadInputsRuleSet",
-          priority: 3,
-          overrideAction: { none: {} },
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: "AWS",
-              name: "AWSManagedRulesKnownBadInputsRuleSet",
-              excludedRules: [], // Can add exclusions if needed
-            },
-          },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: `mnemogram-${stage}-bad-inputs`,
-          },
-        },
-        // Block requests from known bad IPs (placeholder - can be configured)
-        {
-          name: "BlockKnownBadIPs",
-          priority: 4,
-          statement: {
-            ipSetReferenceStatement: {
-              arn: `arn:aws:wafv2:${this.region}:${this.account}:regional/ipset/mnemogram-${stage}-blocked-ips/placeholder`,
-            },
-          },
-          action: { block: {} },
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: `mnemogram-${stage}-blocked-ips`,
-          },
-        },
-        // Geo-restriction structure (ready but not enabled)
-        {
-          name: "GeoRestrictRule",
-          priority: 5,
-          statement: {
-            geoMatchStatement: {
-              countryCodes: ["XX"], // Placeholder - change to actual countries to block
-            },
-          },
-          action: { count: {} }, // Count only - not blocking yet
-          visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: `mnemogram-${stage}-geo-block`,
-          },
-        },
-      ],
     });
 
-    // Create IP Set for blocking known bad IPs (empty by default)
-    const blockedIpSet = new wafv2.CfnIPSet(this, "BlockedIPSet", {
-      name: `mnemogram-${stage}-blocked-ips`,
-      description: "IP addresses to block",
-      scope: "REGIONAL",
-      ipAddressVersion: "IPV4",
-      addresses: [], // Empty by default - can be populated as needed
+    const searchFnUrl = searchFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // Auth handled in function
+      cors: {
+        allowCredentials: false,
+        allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-API-Version"],
+        allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.OPTIONS],
+        allowedOrigins: ["*"],
+        maxAge: cdk.Duration.days(1),
+      },
     });
 
-    // Update the IP set reference in the rule to use the actual ARN
-    // Note: This is a workaround for the TypeScript typing issue
-    const webAclRules = webAcl.rules as any[];
-    if (webAclRules && webAclRules[3]) {
-      webAclRules[3].statement.ipSetReferenceStatement.arn = blockedIpSet.attrArn;
-    }
-
-    // Associate WAF WebACL with API Gateway
-    new wafv2.CfnWebACLAssociation(this, "ApiGatewayWebAclAssociation", {
-      resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/v1`,
-      webAclArn: webAcl.attrArn,
+    const recallFnUrl = recallFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // Auth handled in function
+      cors: {
+        allowCredentials: false,
+        allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-API-Version"],
+        allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.POST, lambda.HttpMethod.OPTIONS],
+        allowedOrigins: ["*"],
+        maxAge: cdk.Duration.days(1),
+      },
     });
 
-    // Add X-API-Version response header for all responses
-    const responseHeaders = {
-      "X-API-Version": "1.0"
-    };
-
-    // Create v1 API root resource for versioning
-    const v1Root = api.root.addResource("v1");
-
-    const authorizer = new apigateway.TokenAuthorizer(this, "JwtAuthorizer", {
-      handler: authorizerFn,
-      identitySource: "method.request.header.Authorization",
-      resultsCacheTtl: cdk.Duration.minutes(5),
+    const manageFnUrl = manageFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // Auth handled in function
+      cors: {
+        allowCredentials: false,
+        allowedHeaders: ["Content-Type", "Authorization", "X-API-Key", "X-API-Version"],
+        allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.DELETE, lambda.HttpMethod.OPTIONS],
+        allowedOrigins: ["*"],
+        maxAge: cdk.Duration.days(1),
+      },
     });
 
-    // Routes
-    const statusResource = v1Root.addResource("status");
-    statusResource.addMethod(
-      "GET",
-      new apigateway.LambdaIntegration(statusFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      {
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
+    const stripeWebhookFnUrl = stripeWebhookFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // No auth for webhooks
+      cors: {
+        allowCredentials: false,
+        allowedHeaders: ["Content-Type", "Stripe-Signature"],
+        allowedMethods: [lambda.HttpMethod.POST, lambda.HttpMethod.OPTIONS],
+        allowedOrigins: ["*"],
+        maxAge: cdk.Duration.days(1),
+      },
+    });
 
-    const memoriesResource = v1Root.addResource("memories");
-    
-    // POST /v1/memories - Create memory and get upload URL
-    memoriesResource.addMethod(
-      "POST",
-      new apigateway.LambdaIntegration(ingestFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
-    
-    // GET /v1/memories - List user's memories
-    memoriesResource.addMethod(
-      "GET",
-      new apigateway.LambdaIntegration(manageFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
-    
-    // PUT /v1/memories - Update existing memory (upload content)
-    memoriesResource.addMethod(
-      "PUT",
-      new apigateway.LambdaIntegration(ingestFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
-    
-    // DELETE /v1/memories - Delete memory
-    memoriesResource.addMethod(
-      "DELETE",
-      new apigateway.LambdaIntegration(manageFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
+    // ── CloudFront Distribution ─────────────────────────────────────
 
-    // POST /v1/memories/{id}/search - Search within specific memory
-    const memoryIdResource = memoriesResource.addResource("{id}");
-    const memorySearchResource = memoryIdResource.addResource("search");
-    memorySearchResource.addMethod(
-      "POST",
-      new apigateway.LambdaIntegration(searchMemoryFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
+    // Create CloudFront distribution to route to Lambda Function URLs
+    const distribution = new cloudfront.Distribution(this, "MnemogramDistribution", {
+      comment: `Mnemogram ${stage} API Distribution`,
+      defaultBehavior: {
+        // Default to status function for health checks
+        origin: new origins.FunctionUrlOrigin(statusFnUrl),
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true,
+      },
+      additionalBehaviors: {
+        // v1/status -> status function
+        "v1/status": {
+          origin: new origins.FunctionUrlOrigin(statusFnUrl),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
+        
+        // v1/memories (POST/PUT) -> ingest function
+        "v1/memories": {
+          origin: new origins.FunctionUrlOrigin(ingestFnUrl),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
+        
+        // v1/memories/* (GET/DELETE for management) -> manage function  
+        "v1/memories/*": {
+          origin: new origins.FunctionUrlOrigin(manageFnUrl),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
 
-    // GET /v1/search - Search across memories (existing API)
-    const searchResource = v1Root.addResource("search");
-    searchResource.addMethod(
-      "GET",
-      new apigateway.LambdaIntegration(searchFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
+        // v1/memories/*/search -> search memory function
+        "v1/memories/*/search": {
+          origin: new origins.FunctionUrlOrigin(searchMemoryFnUrl),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
 
-    // POST /v1/recall - Recall across all memories
-    const recallResource = v1Root.addResource("recall");
-    recallResource.addMethod(
-      "POST",
-      new apigateway.LambdaIntegration(recallFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
-    
-    // GET /v1/recall - Recall across all memories (existing API)
-    recallResource.addMethod(
-      "GET",
-      new apigateway.LambdaIntegration(recallFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      { 
-        authorizer,
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
+        // v1/search -> search function
+        "v1/search": {
+          origin: new origins.FunctionUrlOrigin(searchFnUrl),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
 
-    // Webhook routes (no auth required) - keep at root level for backward compatibility
-    const webhookResource = api.root.addResource("webhook");
-    const stripeWebhookResource = webhookResource.addResource("stripe");
-    stripeWebhookResource.addMethod(
-      "POST",
-      new apigateway.LambdaIntegration(stripeWebhookFn, {
-        integrationResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": `'1.0'`,
-            },
-          },
-        ],
-      }),
-      {
-        methodResponses: [
-          {
-            statusCode: "200",
-            responseParameters: {
-              "method.response.header.X-API-Version": true,
-            },
-          },
-        ],
-      }
-    );
+        // v1/recall -> recall function
+        "v1/recall": {
+          origin: new origins.FunctionUrlOrigin(recallFnUrl),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
+
+        // webhook/stripe -> stripe webhook function
+        "webhook/stripe": {
+          origin: new origins.FunctionUrlOrigin(stripeWebhookFnUrl),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
+      },
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100, // US, Canada, Europe only
+      enabled: true,
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+    });
 
     // ── CloudWatch Monitoring ───────────────────────────────────────
 
@@ -790,20 +518,37 @@ export class MnemogramStack extends cdk.Stack {
       }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
     });
 
-    // API Gateway 5xx errors
-    new cloudwatch.Alarm(this, "ApiGateway5xxAlarm", {
-      alarmName: `mnemogram-${stage}-api-5xx-errors`,
-      alarmDescription: `API Gateway 5xx errors for ${stage}`,
+    // CloudFront error rate alarm (replacing API Gateway 5xx errors)
+    new cloudwatch.Alarm(this, "CloudFront4xxErrorAlarm", {
+      alarmName: `mnemogram-${stage}-cloudfront-4xx-errors`,
+      alarmDescription: `CloudFront 4xx errors for ${stage}`,
       metric: new cloudwatch.Metric({
-        namespace: "AWS/ApiGateway",
-        metricName: "5XXError",
+        namespace: "AWS/CloudFront",
+        metricName: "4xxErrorRate",
         dimensionsMap: {
-          ApiName: api.restApiName,
+          DistributionId: distribution.distributionId,
         },
         statistic: "Sum",
         period: cdk.Duration.minutes(5),
       }),
-      threshold: 10,
+      threshold: 10, // Percentage
+      evaluationPeriods: 2,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
+
+    new cloudwatch.Alarm(this, "CloudFront5xxErrorAlarm", {
+      alarmName: `mnemogram-${stage}-cloudfront-5xx-errors`,
+      alarmDescription: `CloudFront 5xx errors for ${stage}`,
+      metric: new cloudwatch.Metric({
+        namespace: "AWS/CloudFront",
+        metricName: "5xxErrorRate",
+        dimensionsMap: {
+          DistributionId: distribution.distributionId,
+        },
+        statistic: "Sum",
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 5, // Percentage
       evaluationPeriods: 1,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
@@ -853,13 +598,55 @@ export class MnemogramStack extends cdk.Stack {
         height: 6,
       }),
       new cloudwatch.GraphWidget({
-        title: "API Gateway Latency",
+        title: "CloudFront Requests",
         left: [
           new cloudwatch.Metric({
-            namespace: "AWS/ApiGateway",
-            metricName: "Latency",
+            namespace: "AWS/CloudFront",
+            metricName: "Requests",
             dimensionsMap: {
-              ApiName: api.restApiName,
+              DistributionId: distribution.distributionId,
+            },
+            statistic: "Sum",
+          }),
+        ],
+        width: 12,
+        height: 6,
+      })
+    );
+
+    // Add CloudFront error rate widgets
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: "CloudFront Error Rates",
+        left: [
+          new cloudwatch.Metric({
+            namespace: "AWS/CloudFront",
+            metricName: "4xxErrorRate",
+            dimensionsMap: {
+              DistributionId: distribution.distributionId,
+            },
+            statistic: "Average",
+          }),
+          new cloudwatch.Metric({
+            namespace: "AWS/CloudFront",
+            metricName: "5xxErrorRate",
+            dimensionsMap: {
+              DistributionId: distribution.distributionId,
+            },
+            statistic: "Average",
+          }),
+        ],
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: "CloudFront Cache Hit Rate",
+        left: [
+          new cloudwatch.Metric({
+            namespace: "AWS/CloudFront",
+            metricName: "CacheHitRate",
+            dimensionsMap: {
+              DistributionId: distribution.distributionId,
             },
             statistic: "Average",
           }),
@@ -944,9 +731,50 @@ export class MnemogramStack extends cdk.Stack {
 
     // ── Outputs ──────────────────────────────────────────────────────
 
-    new cdk.CfnOutput(this, "ApiUrl", {
-      value: api.url,
-      description: "API Gateway endpoint URL",
+    new cdk.CfnOutput(this, "CloudFrontDomainName", {
+      value: distribution.distributionDomainName,
+      description: "CloudFront distribution domain name",
+    });
+
+    new cdk.CfnOutput(this, "CloudFrontDistributionId", {
+      value: distribution.distributionId,
+      description: "CloudFront distribution ID",
+    });
+
+    // Export individual Function URLs for debugging/testing
+    new cdk.CfnOutput(this, "StatusFunctionUrl", {
+      value: statusFnUrl.url,
+      description: "Status function URL",
+    });
+
+    new cdk.CfnOutput(this, "IngestFunctionUrl", {
+      value: ingestFnUrl.url,
+      description: "Ingest function URL",
+    });
+
+    new cdk.CfnOutput(this, "SearchFunctionUrl", {
+      value: searchFnUrl.url,
+      description: "Search function URL",
+    });
+
+    new cdk.CfnOutput(this, "SearchMemoryFunctionUrl", {
+      value: searchMemoryFnUrl.url,
+      description: "Search memory function URL",
+    });
+
+    new cdk.CfnOutput(this, "RecallFunctionUrl", {
+      value: recallFnUrl.url,
+      description: "Recall function URL",
+    });
+
+    new cdk.CfnOutput(this, "ManageFunctionUrl", {
+      value: manageFnUrl.url,
+      description: "Manage function URL",
+    });
+
+    new cdk.CfnOutput(this, "StripeWebhookFunctionUrl", {
+      value: stripeWebhookFnUrl.url,
+      description: "Stripe webhook function URL",
     });
 
     new cdk.CfnOutput(this, "UserPoolId", {

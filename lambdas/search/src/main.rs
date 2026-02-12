@@ -3,6 +3,7 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::{auth::extract_auth_context, mv2_cache};
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
@@ -38,23 +39,30 @@ struct SearchResponse {
 async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
+    let s3_client = mv2_cache::init_s3_client().await;
 
-    // Extract user ID from authorizer context or headers
-    let user_id = event
+    // Extract authorization from headers (Function URL pattern)
+    let headers: HashMap<String, String> = event
         .headers()
-        .get("x-user-id")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| {
-            // Try to get from request context if available
-            if let Some(_context) = event.request_context().authorizer() {
-                // Note: We'll need to implement proper authorizer context parsing
-                // For now, just use a placeholder
-                None
-            } else {
-                None
-            }
-        })
-        .unwrap_or("anonymous");
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+
+    let auth_context = match extract_auth_context(&headers).await {
+        Ok(ctx) => ctx,
+        Err(_) => {
+            return Ok(Response::builder()
+                .status(401)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&json!({
+                    "error": "unauthorized",
+                    "message": "Valid authorization required"
+                }))?))
+                .map_err(Box::new)?);
+        }
+    };
+
+    let user_id = &auth_context.user_id;
 
     // Extract memory ID from path parameters
     let path_params = event.path_parameters();
@@ -147,7 +155,35 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             .map_err(Box::new)?);
     }
 
-    // TODO: Implement actual search using memvid integration
+    // TODO: Implement actual search using memvid integration + caching
+    // Get the S3 path for the .mv2 file
+    let memory_bucket = std::env::var("MEMORY_BUCKET")
+        .map_err(|_| "MEMORY_BUCKET environment variable not set")?;
+    
+    let s3_key = memory_item
+        .get("s3Key")
+        .or_else(|| memory_item.get("filename"))
+        .and_then(|v| v.as_s().ok())
+        .ok_or("Missing S3 key in memory record")?;
+
+    // Get cached .mv2 file (downloads from S3 if not cached or expired)
+    let _cached_file_path = match mv2_cache::get_cached_mv2_file(&s3_client, &memory_bucket, s3_key).await {
+        Ok(path) => path,
+        Err(e) => {
+            return Ok(Response::builder()
+                .status(500)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&json!({
+                    "error": "cache_error",
+                    "message": format!("Failed to cache .mv2 file: {}", e)
+                }))?))
+                .map_err(Box::new)?);
+        }
+    };
+
+    // Clean up old cache files (opportunistic cleanup)
+    let _ = mv2_cache::cleanup_old_cache_files();
+
     // For now, return placeholder results
     let placeholder_results = vec![
         SearchResult {

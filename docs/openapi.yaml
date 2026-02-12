@@ -1,7 +1,12 @@
 openapi: 3.0.3
 info:
   title: Mnemogram API
-  description: API for ingesting, managing, and searching memory files (.mv2 format)
+  description: |
+    API for ingesting, managing, and searching memory files (.mv2 format)
+    
+    **Architecture**: This API uses AWS Lambda Function URLs behind CloudFront for cost optimization.
+    Each endpoint is served by a dedicated Lambda function with direct HTTP access via Function URLs.
+    CloudFront provides SSL termination, caching, and routing to the appropriate Lambda functions.
   version: 1.0.0
   contact:
     name: Mnemogram Team
@@ -13,9 +18,9 @@ info:
 
 servers:
   - url: https://api.mnemogram.com/v1
-    description: Production server
+    description: Production server (CloudFront + Lambda Function URLs)
   - url: https://staging-api.mnemogram.com/v1
-    description: Staging server
+    description: Staging server (CloudFront + Lambda Function URLs)
 
 components:
   securitySchemes:
