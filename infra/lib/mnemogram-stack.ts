@@ -6,36 +6,51 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import { Construct } from "constructs";
 
+export interface MnemogramStackProps extends cdk.StackProps {
+  stage: string;
+}
+
 export class MnemogramStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: MnemogramStackProps) {
     super(scope, id, props);
+
+    const stage = props.stage;
 
     // ── Storage ──────────────────────────────────────────────────────
 
     // S3 bucket for .mv2 memory files
     const memoryBucket = new s3.Bucket(this, "MemoryBucket", {
-      bucketName: `mnemogram-memories-${this.account}-${this.region}`,
+      bucketName: `mnemogram-${stage}-memories-${this.account}-${this.region}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       versioned: true,
     });
 
+    // DynamoDB billing mode based on stage
+    const billingMode = stage === "prod" ? dynamodb.BillingMode.PROVISIONED : dynamodb.BillingMode.PAY_PER_REQUEST;
+    const readCapacity = stage === "prod" ? 5 : undefined;
+    const writeCapacity = stage === "prod" ? 5 : undefined;
+
     // DynamoDB table for user metadata, API keys, and usage tracking
     const metadataTable = new dynamodb.Table(this, "MetadataTable", {
-      tableName: "mnemogram-metadata",
+      tableName: `mnemogram-${stage}-metadata`,
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode,
+      readCapacity,
+      writeCapacity,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       pointInTimeRecovery: true,
     });
 
     // DynamoDB table for memories metadata
     const memoriesTable = new dynamodb.Table(this, "MemoriesTable", {
-      tableName: "mnemogram-memories",
+      tableName: `mnemogram-${stage}-memories`,
       partitionKey: { name: "memoryId", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode,
+      readCapacity,
+      writeCapacity,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       pointInTimeRecovery: true,
     });
@@ -44,22 +59,28 @@ export class MnemogramStack extends cdk.Stack {
     memoriesTable.addGlobalSecondaryIndex({
       indexName: "userId-index",
       partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+      readCapacity: stage === "prod" ? 2 : undefined,
+      writeCapacity: stage === "prod" ? 2 : undefined,
     });
 
     // DynamoDB table for subscription management
     const subscriptionsTable = new dynamodb.Table(this, "SubscriptionsTable", {
-      tableName: "mnemogram-subscriptions",
+      tableName: `mnemogram-${stage}-subscriptions`,
       partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode,
+      readCapacity,
+      writeCapacity,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       pointInTimeRecovery: true,
     });
 
     // DynamoDB table for API key management  
     const apiKeysTable = new dynamodb.Table(this, "ApiKeysTable", {
-      tableName: "mnemogram-api-keys",
+      tableName: `mnemogram-${stage}-api-keys`,
       partitionKey: { name: "keyId", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode,
+      readCapacity,
+      writeCapacity,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       pointInTimeRecovery: true,
     });
@@ -68,14 +89,18 @@ export class MnemogramStack extends cdk.Stack {
     apiKeysTable.addGlobalSecondaryIndex({
       indexName: "userId-index",
       partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+      readCapacity: stage === "prod" ? 2 : undefined,
+      writeCapacity: stage === "prod" ? 2 : undefined,
     });
 
     // DynamoDB table for usage tracking
     const usageTable = new dynamodb.Table(this, "UsageTable", {
-      tableName: "mnemogram-usage",
+      tableName: `mnemogram-${stage}-usage`,
       partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "date", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode,
+      readCapacity,
+      writeCapacity,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       pointInTimeRecovery: true,
     });
@@ -83,7 +108,7 @@ export class MnemogramStack extends cdk.Stack {
     // ── Auth ─────────────────────────────────────────────────────────
 
     const userPool = new cognito.UserPool(this, "UserPool", {
-      userPoolName: "mnemogram-users",
+      userPoolName: `mnemogram-${stage}-users`,
       selfSignUpEnabled: true,
       signInAliases: { email: true },
       autoVerify: { email: true },
@@ -112,7 +137,7 @@ export class MnemogramStack extends cdk.Stack {
 
     const userPoolClient = new cognito.UserPoolClient(this, "UserPoolClient", {
       userPool,
-      userPoolClientName: "mnemogram-web-client",
+      userPoolClientName: `mnemogram-${stage}-web-client`,
       authFlows: {
         userSrp: true,
       },
@@ -130,7 +155,7 @@ export class MnemogramStack extends cdk.Stack {
     const userPoolDomain = new cognito.UserPoolDomain(this, "UserPoolDomain", {
       userPool,
       cognitoDomain: {
-        domainPrefix: `mnemogram-auth-${this.account}`,
+        domainPrefix: `mnemogram-${stage}-auth-${this.account}`,
       },
     });
 
@@ -159,7 +184,7 @@ export class MnemogramStack extends cdk.Stack {
     // Status (health check)
     const statusFn = new lambda.Function(this, "StatusFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-status",
+      functionName: `mnemogram-${stage}-status`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-status", {
         // During synth without a build, use a dummy path fallback
       }),
@@ -169,7 +194,7 @@ export class MnemogramStack extends cdk.Stack {
     // Ingest (new POST /memories for S3 pre-signed URL flow)
     const ingestFn = new lambda.Function(this, "IngestFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-ingest",
+      functionName: `mnemogram-${stage}-ingest`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/ingest"),
       description: "Ingest memory metadata and generate S3 upload URL",
     });
@@ -177,7 +202,7 @@ export class MnemogramStack extends cdk.Stack {
     // Search within a memory (new POST /memories/{id}/search)
     const searchMemoryFn = new lambda.Function(this, "SearchMemoryFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-search-memory",
+      functionName: `mnemogram-${stage}-search-memory`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/search"),
       description: "Search within a specific memory",
     });
@@ -185,7 +210,7 @@ export class MnemogramStack extends cdk.Stack {
     // Search (existing GET /search endpoint for backward compatibility)
     const searchFn = new lambda.Function(this, "SearchFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-search",
+      functionName: `mnemogram-${stage}-search`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-search"),
       description: "Hybrid search over memory files",
     });
@@ -193,7 +218,7 @@ export class MnemogramStack extends cdk.Stack {
     // Recall
     const recallFn = new lambda.Function(this, "RecallFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-recall",
+      functionName: `mnemogram-${stage}-recall`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/recall"),
       description: "Broader recall across all user memories",
     });
@@ -201,7 +226,7 @@ export class MnemogramStack extends cdk.Stack {
     // Manage
     const manageFn = new lambda.Function(this, "ManageFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-manage",
+      functionName: `mnemogram-${stage}-manage`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-manage"),
       description: "CRUD for memory files",
     });
@@ -209,7 +234,7 @@ export class MnemogramStack extends cdk.Stack {
     // Authorizer (updated)
     const authorizerFn = new lambda.Function(this, "AuthorizerFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-authorizer",
+      functionName: `mnemogram-${stage}-authorizer`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/authorizer"),
       description: "JWT/API key custom authorizer",
     });
@@ -217,7 +242,7 @@ export class MnemogramStack extends cdk.Stack {
     // Stripe webhook handler
     const stripeWebhookFn = new lambda.Function(this, "StripeWebhookFn", {
       ...lambdaDefaults,
-      functionName: "mnemogram-stripe-webhook",
+      functionName: `mnemogram-${stage}-stripe-webhook`,
       code: lambda.Code.fromAsset("../lambdas/target/lambda/stripe-webhook"),
       description: "Stripe webhook event processor",
       timeout: cdk.Duration.seconds(60),
@@ -262,7 +287,7 @@ export class MnemogramStack extends cdk.Stack {
     // ── API Gateway ──────────────────────────────────────────────────
 
     const api = new apigateway.RestApi(this, "MnemogramApi", {
-      restApiName: "mnemogram-api",
+      restApiName: `mnemogram-${stage}-api`,
       description: "Mnemogram REST API",
       deployOptions: {
         stageName: "v1",
