@@ -31,6 +31,21 @@ export class MnemogramStack extends cdk.Stack {
       pointInTimeRecovery: true,
     });
 
+    // DynamoDB table for memories metadata
+    const memoriesTable = new dynamodb.Table(this, "MemoriesTable", {
+      tableName: "mnemogram-memories",
+      partitionKey: { name: "memoryId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecovery: true,
+    });
+
+    // Add GSI on userId for querying user's memories
+    memoriesTable.addGlobalSecondaryIndex({
+      indexName: "userId-index",
+      partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+    });
+
     // DynamoDB table for subscription management
     const subscriptionsTable = new dynamodb.Table(this, "SubscriptionsTable", {
       tableName: "mnemogram-subscriptions",
@@ -104,6 +119,7 @@ export class MnemogramStack extends cdk.Stack {
       environment: {
         MEMORY_BUCKET: memoryBucket.bucketName,
         METADATA_TABLE: metadataTable.tableName,
+        MEMORIES_TABLE: memoriesTable.tableName,
         SUBSCRIPTIONS_TABLE: subscriptionsTable.tableName,
         API_KEYS_TABLE: apiKeysTable.tableName,
         USAGE_TABLE: usageTable.tableName,
@@ -137,6 +153,14 @@ export class MnemogramStack extends cdk.Stack {
       description: "Hybrid search over memory files",
     });
 
+    // Recall
+    const recallFn = new lambda.Function(this, "RecallFn", {
+      ...lambdaDefaults,
+      functionName: "mnemogram-recall",
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/recall"),
+      description: "Broader recall across all user memories",
+    });
+
     // Manage
     const manageFn = new lambda.Function(this, "ManageFn", {
       ...lambdaDefaults,
@@ -168,11 +192,19 @@ export class MnemogramStack extends cdk.Stack {
 
     // Grant permissions
     memoryBucket.grantRead(searchFn);
+    memoryBucket.grantRead(recallFn);
     memoryBucket.grantReadWrite(ingestFn);
     memoryBucket.grantReadWrite(manageFn);
     metadataTable.grantReadWriteData(ingestFn);
     metadataTable.grantReadData(searchFn);
+    metadataTable.grantReadData(recallFn);
     metadataTable.grantReadWriteData(manageFn);
+    
+    // Grant memories table permissions
+    memoriesTable.grantReadWriteData(ingestFn);
+    memoriesTable.grantReadData(searchFn);
+    memoriesTable.grantReadData(recallFn);
+    memoriesTable.grantReadWriteData(manageFn);
     
     // Grant DynamoDB permissions for new tables
     subscriptionsTable.grantReadWriteData(stripeWebhookFn);
@@ -181,6 +213,7 @@ export class MnemogramStack extends cdk.Stack {
     usageTable.grantReadWriteData(manageFn);
     usageTable.grantReadWriteData(ingestFn);
     usageTable.grantReadWriteData(searchFn);
+    usageTable.grantReadWriteData(recallFn);
 
     // ── API Gateway ──────────────────────────────────────────────────
 
@@ -232,6 +265,13 @@ export class MnemogramStack extends cdk.Stack {
     searchResource.addMethod(
       "GET",
       new apigateway.LambdaIntegration(searchFn),
+      { authorizer }
+    );
+
+    const recallResource = api.root.addResource("recall");
+    recallResource.addMethod(
+      "GET",
+      new apigateway.LambdaIntegration(recallFn),
       { authorizer }
     );
 

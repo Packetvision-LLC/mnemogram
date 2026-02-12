@@ -1,5 +1,5 @@
 [package]
-name = "api-search"
+name = "recall"
 version = "0.1.0"
 edition = "2021"
 
@@ -21,3 +21,6 @@ aws-sdk-s3.workspace = true
 aws-sdk-dynamodb.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+
+# Note: memvid-core integration pending
+# memvid-core = "0.1"  # TODO: Add when available
