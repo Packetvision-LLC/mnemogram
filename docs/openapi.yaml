@@ -1,0 +1,774 @@
+openapi: 3.0.3
+info:
+  title: Mnemogram API
+  description: API for ingesting, managing, and searching memory files (.mv2 format)
+  version: 1.0.0
+  contact:
+    name: Mnemogram Team
+    url: https://mnemogram.com
+    email: support@mnemogram.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.mnemogram.com/v1
+    description: Production server
+  - url: https://staging-api.mnemogram.com/v1
+    description: Staging server
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Bearer token for API authentication
+
+  schemas:
+    Memory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the memory
+        userId:
+          type: string
+          description: ID of the user who owns this memory
+        filename:
+          type: string
+          description: Original filename of the uploaded .mv2 file
+        title:
+          type: string
+          description: Human-readable title for the memory
+        description:
+          type: string
+          description: Optional description of the memory content
+        fileSize:
+          type: integer
+          format: int64
+          description: Size of the .mv2 file in bytes
+        contentHash:
+          type: string
+          description: SHA256 hash of the file content for integrity
+        createdAt:
+          type: string
+          format: date-time
+          description: When the memory was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the memory was last updated
+        status:
+          type: string
+          enum: [processing, ready, error]
+          description: Processing status of the memory
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata extracted from the .mv2 file
+      required:
+        - id
+        - userId
+        - filename
+        - fileSize
+        - createdAt
+        - status
+
+    MemoryList:
+      type: object
+      properties:
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Memory'
+        total:
+          type: integer
+          description: Total number of memories for the user
+        limit:
+          type: integer
+          description: Number of results per page
+        offset:
+          type: integer
+          description: Offset for pagination
+      required:
+        - memories
+        - total
+
+    SearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Search query string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 10
+          description: Maximum number of results to return
+        threshold:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          default: 0.7
+          description: Similarity threshold for semantic search
+        filters:
+          type: object
+          additionalProperties: true
+          description: Additional filters to apply to search
+      required:
+        - query
+
+    SearchResult:
+      type: object
+      properties:
+        content:
+          type: string
+          description: Relevant content excerpt from the memory
+        score:
+          type: number
+          format: float
+          description: Similarity score (0.0 to 1.0)
+        offset:
+          type: integer
+          description: Character offset within the original file
+        context:
+          type: string
+          description: Additional context around the match
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata about this result
+      required:
+        - content
+        - score
+
+    SearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        total:
+          type: integer
+          description: Total number of results found
+        query:
+          type: string
+          description: The original search query
+        processedAt:
+          type: string
+          format: date-time
+          description: When the search was processed
+      required:
+        - results
+        - total
+        - query
+
+    ApiKey:
+      type: object
+      properties:
+        keyId:
+          type: string
+          format: uuid
+          description: Unique identifier for the API key
+        name:
+          type: string
+          description: Human-readable name for the API key
+        prefix:
+          type: string
+          description: First few characters of the API key for identification
+        createdAt:
+          type: string
+          format: date-time
+          description: When the API key was created
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the API key was last used
+        status:
+          type: string
+          enum: [active, revoked]
+          description: Current status of the API key
+        permissions:
+          type: array
+          items:
+            type: string
+          description: List of permissions granted to this API key
+      required:
+        - keyId
+        - name
+        - prefix
+        - createdAt
+        - status
+
+    ApiKeyRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Human-readable name for the API key
+        permissions:
+          type: array
+          items:
+            type: string
+          description: List of permissions to grant to this API key
+          default: ["read", "write"]
+      required:
+        - name
+
+    ApiKeyResponse:
+      type: object
+      properties:
+        keyId:
+          type: string
+          format: uuid
+          description: Unique identifier for the API key
+        name:
+          type: string
+          description: Human-readable name for the API key
+        key:
+          type: string
+          description: The actual API key (only returned on creation)
+        createdAt:
+          type: string
+          format: date-time
+          description: When the API key was created
+        permissions:
+          type: array
+          items:
+            type: string
+          description: List of permissions granted to this API key
+      required:
+        - keyId
+        - name
+        - key
+        - createdAt
+        - permissions
+
+    UsageStats:
+      type: object
+      properties:
+        userId:
+          type: string
+          description: User ID
+        period:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date
+              description: Start date of the usage period
+            end:
+              type: string
+              format: date
+              description: End date of the usage period
+        apiCalls:
+          type: integer
+          description: Total number of API calls made
+        storageBytes:
+          type: integer
+          format: int64
+          description: Total storage used in bytes
+        searchQueries:
+          type: integer
+          description: Total number of search queries performed
+        breakdown:
+          type: object
+          properties:
+            memories:
+              type: object
+              properties:
+                created:
+                  type: integer
+                  description: Number of memories created
+                retrieved:
+                  type: integer
+                  description: Number of memory retrievals
+                deleted:
+                  type: integer
+                  description: Number of memories deleted
+            searches:
+              type: object
+              properties:
+                total:
+                  type: integer
+                  description: Total search queries
+                semantic:
+                  type: integer
+                  description: Semantic search queries
+                keyword:
+                  type: integer
+                  description: Keyword search queries
+      required:
+        - userId
+        - period
+        - apiCalls
+        - storageBytes
+        - searchQueries
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall system health status
+        timestamp:
+          type: string
+          format: date-time
+          description: When the health check was performed
+        version:
+          type: string
+          description: API version
+        services:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [healthy, unhealthy]
+              description: Database connectivity status
+            storage:
+              type: string
+              enum: [healthy, unhealthy]
+              description: S3 storage status
+            search:
+              type: string
+              enum: [healthy, unhealthy]
+              description: Search service status
+        uptime:
+          type: integer
+          description: Service uptime in seconds
+      required:
+        - status
+        - timestamp
+        - version
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error type or code
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional error details
+        requestId:
+          type: string
+          description: Request ID for debugging
+      required:
+        - error
+        - message
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Check the health status of the API and its dependencies
+      operationId: getHealth
+      tags:
+        - System
+      security: []
+      responses:
+        '200':
+          description: Health status information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /memories:
+    post:
+      summary: Ingest memory file
+      description: Upload and ingest a .mv2 memory file
+      operationId: ingestMemory
+      tags:
+        - Memories
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The .mv2 memory file to upload
+                title:
+                  type: string
+                  description: Optional title for the memory
+                description:
+                  type: string
+                  description: Optional description for the memory
+                metadata:
+                  type: string
+                  description: Optional JSON metadata
+              required:
+                - file
+      responses:
+        '201':
+          description: Memory successfully ingested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Memory'
+        '400':
+          description: Invalid request or file format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: File too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      summary: List user's memories
+      description: Retrieve a list of all memories belonging to the authenticated user
+      operationId: listMemories
+      tags:
+        - Memories
+      parameters:
+        - name: limit
+          in: query
+          description: Number of results per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          description: Offset for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sort
+          in: query
+          description: Sort order
+          schema:
+            type: string
+            enum: [created_asc, created_desc, updated_asc, updated_desc, name_asc, name_desc]
+            default: created_desc
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum: [processing, ready, error]
+      responses:
+        '200':
+          description: List of memories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryList'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /memories/{id}:
+    get:
+      summary: Get memory details
+      description: Retrieve detailed information about a specific memory
+      operationId: getMemory
+      tags:
+        - Memories
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Memory ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Memory details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Memory'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Memory not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: Delete memory
+      description: Permanently delete a memory and its associated data
+      operationId: deleteMemory
+      tags:
+        - Memories
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Memory ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Memory successfully deleted
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Memory not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /memories/{id}/search:
+    post:
+      summary: Search within memory
+      description: Perform semantic search within a specific memory file
+      operationId: searchMemory
+      tags:
+        - Search
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Memory ID to search within
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: Invalid search request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Memory not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api-keys:
+    post:
+      summary: Generate API key
+      description: Create a new API key for programmatic access
+      operationId: createApiKey
+      tags:
+        - API Keys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyRequest'
+      responses:
+        '201':
+          description: API key created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      summary: List API keys
+      description: Retrieve a list of all API keys for the authenticated user
+      operationId: listApiKeys
+      tags:
+        - API Keys
+      parameters:
+        - name: status
+          in: query
+          description: Filter by status
+          schema:
+            type: string
+            enum: [active, revoked]
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apiKeys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKey'
+                  total:
+                    type: integer
+                    description: Total number of API keys
+                required:
+                  - apiKeys
+                  - total
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api-keys/{id}:
+    delete:
+      summary: Revoke API key
+      description: Revoke (disable) an API key
+      operationId: revokeApiKey
+      tags:
+        - API Keys
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: API key ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: API key successfully revoked
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: API key not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /usage:
+    get:
+      summary: Get usage statistics
+      description: Retrieve usage statistics for the authenticated user
+      operationId: getUsageStats
+      tags:
+        - Usage
+      parameters:
+        - name: start_date
+          in: query
+          description: Start date for usage period (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          description: End date for usage period (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: granularity
+          in: query
+          description: Granularity of usage data
+          schema:
+            type: string
+            enum: [daily, weekly, monthly]
+            default: daily
+      responses:
+        '200':
+          description: Usage statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageStats'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+tags:
+  - name: System
+    description: System health and status operations
+  - name: Memories
+    description: Memory file ingestion and management
+  - name: Search
+    description: Search operations within memories
+  - name: API Keys
+    description: API key management
+  - name: Usage
+    description: Usage statistics and analytics
