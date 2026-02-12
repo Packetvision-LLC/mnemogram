@@ -11,7 +11,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # TODO: Replace ACCOUNT_ID with your actual AWS account ID
-  AWS_ROLE_ARN: arn:aws:iam::ACCOUNT_ID:role/mnemogram-github-deploy
+  AWS_ROLE_ARN: "arn:aws:iam::369292120314:role/mnemogram-github-deploy"
   AWS_REGION: us-east-1
 
 jobs:
