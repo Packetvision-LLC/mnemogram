@@ -93,16 +93,45 @@ export class MnemogramStack extends cdk.Stack {
         requireDigits: true,
         requireSymbols: false,
       },
+      standardAttributes: {
+        email: {
+          required: true,
+          mutable: true,
+        },
+        fullname: {
+          required: false,
+          mutable: true,
+        },
+      },
+      customAttributes: {
+        'subscription_tier': new cognito.StringAttribute({ minLen: 1, maxLen: 20 }),
+        'created_at': new cognito.StringAttribute({ minLen: 1, maxLen: 50 }),
+      },
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     const userPoolClient = new cognito.UserPoolClient(this, "UserPoolClient", {
       userPool,
-      userPoolClientName: "mnemogram-api-client",
+      userPoolClientName: "mnemogram-web-client",
       authFlows: {
         userSrp: true,
       },
       generateSecret: false,
+      oAuth: {
+        flows: {
+          authorizationCodeGrant: true,
+        },
+        scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.OPENID, cognito.OAuthScope.PROFILE],
+        callbackUrls: ['http://localhost:3000/dashboard', 'https://mnemogram.com/dashboard'],
+        logoutUrls: ['http://localhost:3000/', 'https://mnemogram.com/'],
+      },
+    });
+
+    const userPoolDomain = new cognito.UserPoolDomain(this, "UserPoolDomain", {
+      userPool,
+      cognitoDomain: {
+        domainPrefix: `mnemogram-auth-${this.account}`,
+      },
     });
 
     // ── Lambda Functions ─────────────────────────────────────────────
@@ -344,6 +373,11 @@ export class MnemogramStack extends cdk.Stack {
     new cdk.CfnOutput(this, "UserPoolClientId", {
       value: userPoolClient.userPoolClientId,
       description: "Cognito User Pool Client ID",
+    });
+
+    new cdk.CfnOutput(this, "UserPoolDomainName", {
+      value: userPoolDomain.domainName,
+      description: "Cognito User Pool Domain Name",
     });
 
     new cdk.CfnOutput(this, "MemoryBucketName", {
