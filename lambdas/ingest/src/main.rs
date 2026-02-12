@@ -1,6 +1,7 @@
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_s3 as s3;
+use aws_sdk_sqs::Client as SqsClient;
 use chrono::Utc;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,16 @@ struct IngestResponse {
     expected_format: String,
 }
 
+#[derive(Serialize)]
+struct SketchBuilderMessage {
+    #[serde(rename = "memoryId")]
+    memory_id: String,
+    #[serde(rename = "userId")]
+    user_id: String,
+    #[serde(rename = "triggerType")]
+    trigger_type: String,
+}
+
 /// POST /memories - Memory ingest
 /// Accept memory name/description + S3 pre-signed URL flow
 /// Create metadata in DynamoDB memories table (memoryId, userId, name, description, s3Key, sizeBytes, createdAt)
@@ -34,6 +45,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let s3_client = s3::Client::new(&config);
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
+    let sqs_client = SqsClient::new(&config);
 
     // Extract user ID from authorizer context or headers
     let user_id = event
@@ -133,6 +145,31 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .map_err(Box::new)?
         .uri()
         .to_string();
+
+    // After successful metadata creation, trigger sketch building
+    if let Some(sketch_queue_url) = std::env::var("SKETCH_BUILDER_QUEUE_URL").ok() {
+        let sketch_message = SketchBuilderMessage {
+            memory_id: memory_id.clone(),
+            user_id: user_id.to_string(),
+            trigger_type: "post_ingest".to_string(),
+        };
+
+        let message_body = serde_json::to_string(&sketch_message)?;
+        
+        // Send message to SQS queue for sketch building (best effort)
+        if let Err(e) = sqs_client
+            .send_message()
+            .queue_url(&sketch_queue_url)
+            .message_body(message_body)
+            .send()
+            .await 
+        {
+            // Log error but don't fail the ingest
+            tracing::warn!("Failed to trigger sketch building for memory {}: {}", memory_id, e);
+        } else {
+            tracing::info!("Triggered sketch building for memory {}", memory_id);
+        }
+    }
 
     let response = IngestResponse {
         memory_id,
