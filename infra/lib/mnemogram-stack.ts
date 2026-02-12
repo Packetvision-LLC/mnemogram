@@ -175,6 +175,20 @@ export class MnemogramStack extends cdk.Stack {
       },
     });
 
+    // Queue for triggering AI enrichment after memory upload
+    const enrichmentQueue = new sqs.Queue(this, "EnrichmentQueue", {
+      queueName: `mnemogram-${stage}-enrichment`,
+      visibilityTimeout: cdk.Duration.minutes(15), // Give enough time for enrichment processing
+      retentionPeriod: cdk.Duration.days(14),
+      deadLetterQueue: {
+        queue: new sqs.Queue(this, "EnrichmentDLQ", {
+          queueName: `mnemogram-${stage}-enrichment-dlq`,
+          retentionPeriod: cdk.Duration.days(14),
+        }),
+        maxReceiveCount: 3,
+      },
+    });
+
     // ── Auth ─────────────────────────────────────────────────────────
 
     const userPool = new cognito.UserPool(this, "UserPool", {
@@ -251,6 +265,7 @@ export class MnemogramStack extends cdk.Stack {
         USER_POOL_ID: userPool.userPoolId,
         SKETCH_BUILDER_QUEUE_URL: sketchBuilderQueue.queueUrl,
         INDEX_REBUILD_QUEUE_URL: indexRebuildQueue.queueUrl,
+        ENRICHMENT_QUEUE_URL: enrichmentQueue.queueUrl,
       },
     };
 
@@ -380,6 +395,54 @@ export class MnemogramStack extends cdk.Stack {
       memorySize: 1024, // More memory for processing
     });
 
+    // Enrichment Lambda for AI-powered memory enhancement (MNEM-154 + MNEM-155)
+    const enrichmentFn = new lambda.Function(this, "EnrichmentFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-enrichment`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/enrichment"),
+      description: "AI-powered enrichment of memories with structured data extraction",
+      layers: [memvidLayer],
+      timeout: cdk.Duration.minutes(10), // Timeout for enrichment processing
+      memorySize: 1024, // More memory for AI processing
+      environment: {
+        ...lambdaDefaults.environment,
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+      },
+    });
+
+    // API: Memory Cards endpoint (MNEM-154 + MNEM-155)
+    const apiCardsFn = new lambda.Function(this, "ApiCardsFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-api-cards`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/api-cards"),
+      description: "Get extracted memory cards from enriched memories",
+      layers: [memvidLayer],
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+    });
+
+    // API: Facts endpoint (MNEM-154 + MNEM-155) 
+    const apiFactsFn = new lambda.Function(this, "ApiFactsFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-api-facts`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/api-facts"),
+      description: "Get structured facts from enriched memories",
+      layers: [memvidLayer],
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+    });
+
+    // API: State endpoint (MNEM-154 + MNEM-155)
+    const apiStateFn = new lambda.Function(this, "ApiStateFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-api-state`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/api-state"),
+      description: "O(1) entity state lookup from enriched memories",
+      layers: [memvidLayer],
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 512,
+    });
+
     // Add memvid layer to functions that need it
     searchMemoryFn.addLayers(memvidLayer);
     recallFn.addLayers(memvidLayer);
@@ -408,6 +471,12 @@ export class MnemogramStack extends cdk.Stack {
       maxBatchingWindow: cdk.Duration.seconds(5),
     }));
 
+    // Connect enrichment to its SQS queue
+    enrichmentFn.addEventSource(new lambdaEventSources.SqsEventSource(enrichmentQueue, {
+      batchSize: 1, // Process one memory at a time for enrichment
+      maxBatchingWindow: cdk.Duration.seconds(5),
+    }));
+
     // Connect index rebuild functionality to SQS queue (could be handled by maintenance or a separate function)
     // For now, we'll let the validate-upload function handle index rebuilds directly via SQS messages
 
@@ -429,6 +498,10 @@ export class MnemogramStack extends cdk.Stack {
     memoryBucket.grantReadWrite(validateUploadFn);
     memoryBucket.grantReadWrite(maintenanceFn);
     memoryBucket.grantReadWrite(sketchBuilderFn);
+    memoryBucket.grantReadWrite(enrichmentFn);
+    memoryBucket.grantRead(apiCardsFn);
+    memoryBucket.grantRead(apiFactsFn);
+    memoryBucket.grantRead(apiStateFn);
     
     metadataTable.grantReadWriteData(ingestFn);
     metadataTable.grantReadData(searchFn);
@@ -447,6 +520,10 @@ export class MnemogramStack extends cdk.Stack {
     memoriesTable.grantReadWriteData(validateUploadFn);
     memoriesTable.grantReadWriteData(maintenanceFn);
     memoriesTable.grantReadWriteData(sketchBuilderFn);
+    memoriesTable.grantReadWriteData(enrichmentFn);
+    memoriesTable.grantReadData(apiCardsFn);
+    memoriesTable.grantReadData(apiFactsFn);
+    memoriesTable.grantReadData(apiStateFn);
     
     // Grant API keys table access to authorizer
     apiKeysTable.grantReadData(authorizerFn);
@@ -454,6 +531,9 @@ export class MnemogramStack extends cdk.Stack {
     // Grant DynamoDB permissions for new tables
     subscriptionsTable.grantReadWriteData(stripeWebhookFn);
     subscriptionsTable.grantReadData(manageFn);
+    subscriptionsTable.grantReadData(apiCardsFn);
+    subscriptionsTable.grantReadData(apiFactsFn);
+    subscriptionsTable.grantReadData(apiStateFn);
     apiKeysTable.grantReadWriteData(manageFn);
     usageTable.grantReadWriteData(manageFn);
     usageTable.grantReadWriteData(ingestFn);
@@ -467,6 +547,8 @@ export class MnemogramStack extends cdk.Stack {
     sketchBuilderQueue.grantConsumeMessages(sketchBuilderFn);
     indexRebuildQueue.grantSendMessages(validateUploadFn); // Trigger index rebuild
     indexRebuildQueue.grantSendMessages(maintenanceFn);
+    enrichmentQueue.grantSendMessages(ingestFn); // Trigger enrichment after ingest
+    enrichmentQueue.grantConsumeMessages(enrichmentFn);
 
     // ── API Gateway ──────────────────────────────────────────────────
 
@@ -779,6 +861,88 @@ export class MnemogramStack extends cdk.Stack {
     memorySearchResource.addMethod(
       "POST",
       new apigateway.LambdaIntegration(searchMemoryFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
+    );
+
+    // GET /v1/memories/{id}/cards - Get extracted memory cards (Pro/Enterprise only)
+    const cardsResource = memoryIdResource.addResource("cards");
+    cardsResource.addMethod(
+      "GET",
+      new apigateway.LambdaIntegration(apiCardsFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
+    );
+
+    // GET /v1/memories/{id}/facts - Get structured facts (Pro/Enterprise only)
+    const factsResource = memoryIdResource.addResource("facts");
+    factsResource.addMethod(
+      "GET",
+      new apigateway.LambdaIntegration(apiFactsFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
+    );
+
+    // GET /v1/memories/{id}/state/{entity} - Get entity state lookup (Pro/Enterprise only)
+    const stateResource = memoryIdResource.addResource("state");
+    const stateEntityResource = stateResource.addResource("{entity}");
+    stateEntityResource.addMethod(
+      "GET",
+      new apigateway.LambdaIntegration(apiStateFn, {
         integrationResponses: [
           {
             statusCode: "200",

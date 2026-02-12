@@ -453,6 +453,179 @@ components:
         - error
         - message
 
+    MemoryCard:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique identifier for this memory card
+        title:
+          type: string
+          description: Title or subject of the memory card
+        content:
+          type: string
+          description: Main content of the memory card
+        timestamp:
+          type: string
+          nullable: true
+          description: Timestamp within the memory (e.g., "00:02:15")
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags associated with this memory card
+        entities:
+          type: array
+          items:
+            type: string
+          description: Named entities mentioned in this card
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Confidence score for this extraction
+      required:
+        - id
+        - title
+        - content
+
+    MemoryCardsResponse:
+      type: object
+      properties:
+        memory_id:
+          type: string
+          description: ID of the memory
+        cards:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemoryCard'
+          description: Extracted memory cards
+        count:
+          type: integer
+          description: Number of memory cards extracted
+      required:
+        - memory_id
+        - cards
+        - count
+
+    MemoryFact:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique identifier for this fact
+        type:
+          type: string
+          description: Type of fact (person, place, event, concept, etc.)
+        subject:
+          type: string
+          description: Subject of the fact
+        predicate:
+          type: string
+          description: Predicate or relationship
+        object:
+          type: string
+          description: Object or value
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Confidence score for this fact extraction
+        sources:
+          type: array
+          items:
+            type: string
+          description: Source references within the memory
+        timestamp:
+          type: string
+          nullable: true
+          description: When this fact occurred or was mentioned
+      required:
+        - id
+        - type
+        - subject
+        - predicate
+        - object
+
+    MemoryFactsResponse:
+      type: object
+      properties:
+        memory_id:
+          type: string
+          description: ID of the memory
+        facts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemoryFact'
+          description: Extracted structured facts
+        count:
+          type: integer
+          description: Number of facts extracted
+      required:
+        - memory_id
+        - facts
+        - count
+
+    EntityState:
+      type: object
+      properties:
+        entity:
+          type: string
+          description: Name of the entity
+        type:
+          type: string
+          description: Type of entity (person, place, concept, etc.)
+        attributes:
+          type: object
+          additionalProperties: true
+          description: Current attributes and their values
+        relationships:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: Type of relationship
+              target:
+                type: string
+                description: Target entity or value
+              strength:
+                type: number
+                format: float
+                description: Strength of the relationship
+          description: Relationships to other entities
+        first_mentioned:
+          type: string
+          nullable: true
+          description: Timestamp when first mentioned
+        last_updated:
+          type: string
+          nullable: true
+          description: Timestamp when last updated
+      required:
+        - entity
+        - type
+        - attributes
+
+    EntityStateResponse:
+      type: object
+      properties:
+        memory_id:
+          type: string
+          description: ID of the memory
+        entity:
+          type: string
+          description: Name of the entity
+        state:
+          $ref: '#/components/schemas/EntityState'
+      required:
+        - memory_id
+        - entity
+        - state
+
 security:
   - BearerAuth: []
 
@@ -804,6 +977,243 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Memory not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/memories/{id}/cards:
+    get:
+      summary: Get memory cards
+      description: Extract structured memory cards from an enriched memory (Pro/Enterprise only)
+      operationId: getMemoryCards
+      tags:
+        - Enrichment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Memory ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Memory cards extracted from the enriched memory
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryCardsResponse'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Premium subscription required
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Memory not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Memory not enriched
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/memories/{id}/facts:
+    get:
+      summary: Get memory facts
+      description: Extract structured facts from an enriched memory (Pro/Enterprise only)
+      operationId: getMemoryFacts
+      tags:
+        - Enrichment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Memory ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Structured facts extracted from the enriched memory
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryFactsResponse'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Premium subscription required
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Memory not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Memory not enriched
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/memories/{id}/state/{entity}:
+    get:
+      summary: Get entity state
+      description: O(1) lookup of entity state from an enriched memory (Pro/Enterprise only)
+      operationId: getEntityState
+      tags:
+        - Enrichment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Memory ID
+          schema:
+            type: string
+            format: uuid
+        - name: entity
+          in: path
+          required: true
+          description: Entity name to lookup
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Entity state information
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityStateResponse'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Premium subscription required
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Memory or entity not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Memory not enriched
           headers:
             X-API-Version:
               description: API version

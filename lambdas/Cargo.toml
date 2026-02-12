@@ -15,6 +15,10 @@ members = [
     "validate-upload",
     "maintenance",
     "sketch-builder",
+    "enrichment",
+    "api-cards",
+    "api-facts",
+    "api-state",
 ]
 
 [workspace.dependencies]
