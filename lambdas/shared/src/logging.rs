@@ -14,6 +14,16 @@ impl StructuredLogger {
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
 
+        // Add X-Ray trace ID if available
+        if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
+            log_data["traceId"] = json!(trace_id);
+        }
+
+        // Add AWS request ID if available
+        if let Ok(request_id) = std::env::var("AWS_REQUEST_ID") {
+            log_data["awsRequestId"] = json!(request_id);
+        }
+
         if let Value::Object(ref mut map) = log_data {
             for (key, value) in fields {
                 map.insert(key.to_string(), value);
@@ -31,6 +41,16 @@ impl StructuredLogger {
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
 
+        // Add X-Ray trace ID if available
+        if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
+            log_data["traceId"] = json!(trace_id);
+        }
+
+        // Add AWS request ID if available
+        if let Ok(request_id) = std::env::var("AWS_REQUEST_ID") {
+            log_data["awsRequestId"] = json!(request_id);
+        }
+
         if let Value::Object(ref mut map) = log_data {
             for (key, value) in fields {
                 map.insert(key.to_string(), value);
@@ -47,6 +67,16 @@ impl StructuredLogger {
             "message": message,
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
+
+        // Add X-Ray trace ID if available
+        if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
+            log_data["traceId"] = json!(trace_id);
+        }
+
+        // Add AWS request ID if available
+        if let Ok(request_id) = std::env::var("AWS_REQUEST_ID") {
+            log_data["awsRequestId"] = json!(request_id);
+        }
 
         if let Value::Object(ref mut map) = log_data {
             for (key, value) in fields {
@@ -203,7 +233,7 @@ impl StructuredLogger {
     }
 }
 
-/// Initialize logging for Lambda functions
+/// Initialize logging for Lambda functions with X-Ray integration
 pub fn init_logging() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -216,10 +246,79 @@ pub fn init_logging() {
         .init();
 }
 
-/// Create log context fields for a request
+/// Extract request ID from Lambda event context or generate one
+pub fn get_or_generate_request_id(lambda_context: Option<&lambda_runtime::Context>) -> String {
+    if let Some(ctx) = lambda_context {
+        ctx.request_id.clone()
+    } else {
+        // Generate a new request ID if not available
+        uuid::Uuid::new_v4().to_string()
+    }
+}
+
+/// Create log context fields for a request with X-Ray trace integration
 pub fn create_log_context(request_id: &str, function_name: &str) -> HashMap<&'static str, Value> {
     let mut fields = HashMap::new();
     fields.insert("requestId", json!(request_id));
     fields.insert("functionName", json!(function_name));
+    
+    // Add X-Ray trace ID if available
+    if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
+        fields.insert("traceId", json!(trace_id));
+    }
+    
+    // Add AWS Lambda request ID if different from our request ID
+    if let Ok(aws_request_id) = std::env::var("AWS_REQUEST_ID") {
+        if aws_request_id != request_id {
+            fields.insert("awsRequestId", json!(aws_request_id));
+        }
+    }
+    
     fields
+}
+
+/// Macro to create a structured log entry with automatic request ID and trace context
+#[macro_export]
+macro_rules! log_with_context {
+    ($level:expr, $message:expr, $request_id:expr) => {
+        {
+            let mut fields = std::collections::HashMap::new();
+            fields.insert("requestId", serde_json::json!($request_id));
+            
+            // Add X-Ray trace ID if available
+            if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
+                fields.insert("traceId", serde_json::json!(trace_id));
+            }
+            
+            match $level {
+                "info" => $crate::logging::StructuredLogger::info($message, fields),
+                "warn" => $crate::logging::StructuredLogger::warn($message, fields),
+                "error" => $crate::logging::StructuredLogger::error($message, fields),
+                _ => $crate::logging::StructuredLogger::info($message, fields),
+            }
+        }
+    };
+    
+    ($level:expr, $message:expr, $request_id:expr, $($key:expr => $value:expr),+) => {
+        {
+            let mut fields = std::collections::HashMap::new();
+            fields.insert("requestId", serde_json::json!($request_id));
+            
+            // Add X-Ray trace ID if available
+            if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
+                fields.insert("traceId", serde_json::json!(trace_id));
+            }
+            
+            $(
+                fields.insert($key, serde_json::json!($value));
+            )+
+            
+            match $level {
+                "info" => $crate::logging::StructuredLogger::info($message, fields),
+                "warn" => $crate::logging::StructuredLogger::warn($message, fields), 
+                "error" => $crate::logging::StructuredLogger::error($message, fields),
+                _ => $crate::logging::StructuredLogger::info($message, fields),
+            }
+        }
+    };
 }

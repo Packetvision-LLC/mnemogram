@@ -11,6 +11,8 @@ import * as snsSubscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as backup from "aws-cdk-lib/aws-backup";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
+import * as wafv2 from "aws-cdk-lib/aws-wafv2";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 
 export interface MnemogramStackProps extends cdk.StackProps {
@@ -204,6 +206,7 @@ export class MnemogramStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       handler: "bootstrap",
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-status"),
+      tracing: lambda.Tracing.ACTIVE,
       environment: {
         MEMORY_BUCKET: memoryBucket.bucketName,
         METADATA_TABLE: metadataTable.tableName,
@@ -212,6 +215,7 @@ export class MnemogramStack extends cdk.Stack {
         API_KEYS_TABLE: apiKeysTable.tableName,
         USAGE_TABLE: usageTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
+        _X_AMZN_TRACE_ID: "placeholder", // This will be set by Lambda runtime
       },
     };
 
@@ -320,6 +324,14 @@ export class MnemogramStack extends cdk.Stack {
 
     // ── API Gateway ──────────────────────────────────────────────────
 
+    // ── API Gateway Access Logging ──────────────────────────────────
+
+    const apiAccessLogGroup = new logs.LogGroup(this, "ApiAccessLogGroup", {
+      logGroupName: `/aws/apigateway/mnemogram-${stage}-access-logs`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     const api = new apigateway.RestApi(this, "MnemogramApi", {
       restApiName: `mnemogram-${stage}-api`,
       description: "Mnemogram REST API",
@@ -327,11 +339,147 @@ export class MnemogramStack extends cdk.Stack {
         stageName: "v1",
         throttlingRateLimit: 100,
         throttlingBurstLimit: 200,
+        accessLogDestination: new apigateway.LogGroupLogDestination(apiAccessLogGroup),
+        accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields({
+          caller: false,
+          httpMethod: true,
+          ip: true,
+          protocol: true,
+          requestTime: true,
+          resourcePath: true,
+          responseLength: true,
+          status: true,
+          user: true,
+          requestId: true,
+          requestHeaders: false,
+        }),
       },
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
       },
+    });
+
+    // ── AWS WAF WebACL ──────────────────────────────────────────────
+
+    const webAcl = new wafv2.CfnWebACL(this, "MnemogramWebAcl", {
+      name: `mnemogram-${stage}-web-acl`,
+      description: "WAF rules for Mnemogram API Gateway",
+      scope: "REGIONAL",
+      defaultAction: { allow: {} },
+      visibilityConfig: {
+        sampledRequestsEnabled: true,
+        cloudWatchMetricsEnabled: true,
+        metricName: `mnemogram-${stage}-web-acl`,
+      },
+      rules: [
+        // Rate limiting: 1000 requests per 5 min per IP
+        {
+          name: "RateLimitRule",
+          priority: 1,
+          statement: {
+            rateBasedStatement: {
+              limit: 1000,
+              aggregateKeyType: "IP",
+            },
+          },
+          action: { block: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: `mnemogram-${stage}-rate-limit`,
+          },
+        },
+        // AWS managed rule: Common rule set
+        {
+          name: "AWSManagedRulesCommonRuleSet",
+          priority: 2,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesCommonRuleSet",
+              excludedRules: [], // Can add exclusions if needed
+            },
+          },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: `mnemogram-${stage}-common-rules`,
+          },
+        },
+        // AWS managed rule: Known bad inputs
+        {
+          name: "AWSManagedRulesKnownBadInputsRuleSet",
+          priority: 3,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesKnownBadInputsRuleSet",
+              excludedRules: [], // Can add exclusions if needed
+            },
+          },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: `mnemogram-${stage}-bad-inputs`,
+          },
+        },
+        // Block requests from known bad IPs (placeholder - can be configured)
+        {
+          name: "BlockKnownBadIPs",
+          priority: 4,
+          statement: {
+            ipSetReferenceStatement: {
+              arn: `arn:aws:wafv2:${this.region}:${this.account}:regional/ipset/mnemogram-${stage}-blocked-ips/placeholder`,
+            },
+          },
+          action: { block: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: `mnemogram-${stage}-blocked-ips`,
+          },
+        },
+        // Geo-restriction structure (ready but not enabled)
+        {
+          name: "GeoRestrictRule",
+          priority: 5,
+          statement: {
+            geoMatchStatement: {
+              countryCodes: ["XX"], // Placeholder - change to actual countries to block
+            },
+          },
+          action: { count: {} }, // Count only - not blocking yet
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: `mnemogram-${stage}-geo-block`,
+          },
+        },
+      ],
+    });
+
+    // Create IP Set for blocking known bad IPs (empty by default)
+    const blockedIpSet = new wafv2.CfnIPSet(this, "BlockedIPSet", {
+      name: `mnemogram-${stage}-blocked-ips`,
+      description: "IP addresses to block",
+      scope: "REGIONAL",
+      ipAddressVersion: "IPV4",
+      addresses: [], // Empty by default - can be populated as needed
+    });
+
+    // Update the IP set reference in the rule to use the actual ARN
+    const ipSetRule = webAcl.rules?.[3] as any;
+    if (ipSetRule) {
+      ipSetRule.statement.ipSetReferenceStatement.arn = blockedIpSet.attrArn;
+    }
+
+    // Associate WAF WebACL with API Gateway
+    new wafv2.CfnWebACLAssociation(this, "ApiGatewayWebAclAssociation", {
+      resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/v1`,
+      webAclArn: webAcl.attrArn,
     });
 
     // Add X-API-Version response header for all responses
