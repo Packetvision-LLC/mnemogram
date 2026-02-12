@@ -148,6 +148,14 @@ async fn handle_checkout_completed(
         .as_ref()
         .ok_or("Missing subscription in checkout session")?;
 
+    // Extract billing period from metadata
+    let billing_period = session
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("billingPeriod"))
+        .unwrap_or("monthly")
+        .to_string();
+
     // Extract promo code info if available
     let promo_code = if session.total_details
         .as_ref()
@@ -169,6 +177,7 @@ async fn handle_checkout_completed(
     item.insert("stripeCustomerId".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(customer_id.clone()));
     item.insert("stripeSubscriptionId".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(subscription_id.clone()));
     item.insert("status".to_string(), aws_sdk_dynamodb::types::AttributeValue::S("active".to_string()));
+    item.insert("billingPeriod".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(billing_period.clone()));
     item.insert("createdAt".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(now.clone()));
     item.insert("updatedAt".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(now));
 
@@ -185,7 +194,7 @@ async fn handle_checkout_completed(
         .send()
         .await?;
 
-    info!("Created subscription record for user: {}", user_id);
+    info!("Created subscription record for user: {} with billing period: {}", user_id, billing_period);
     Ok(())
 }
 
@@ -209,24 +218,41 @@ async fn handle_subscription_updated(
         .map(|s| s.as_str())
         .unwrap_or("unknown");
 
+    // Determine billing period from price interval
+    let billing_period = subscription.items.data
+        .first()
+        .and_then(|item| item.price.metadata.as_ref())
+        .and_then(|m| m.get("billingPeriod"))
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| {
+            // Fallback: try to determine from existing metadata or default to monthly
+            subscription.metadata
+                .as_ref()
+                .and_then(|m| m.get("billingPeriod"))
+                .map(|s| s.as_str())
+                .unwrap_or("monthly")
+        });
+
     let current_period_end = DateTime::from_timestamp(subscription.current_period_end, 0)
         .unwrap_or_else(|| Utc::now())
         .to_rfc3339();
 
     let now = Utc::now().to_rfc3339();
 
-    let mut update_expr = "SET #status = :status, #planId = :planId, #currentPeriodEnd = :currentPeriodEnd, #updatedAt = :updatedAt".to_string();
+    let mut update_expr = "SET #status = :status, #planId = :planId, #currentPeriodEnd = :currentPeriodEnd, #billingPeriod = :billingPeriod, #updatedAt = :updatedAt".to_string();
     let mut expr_attr_names = HashMap::new();
     let mut expr_attr_values = HashMap::new();
 
     expr_attr_names.insert("#status".to_string(), "status".to_string());
     expr_attr_names.insert("#planId".to_string(), "planId".to_string());
     expr_attr_names.insert("#currentPeriodEnd".to_string(), "currentPeriodEnd".to_string());
+    expr_attr_names.insert("#billingPeriod".to_string(), "billingPeriod".to_string());
     expr_attr_names.insert("#updatedAt".to_string(), "updatedAt".to_string());
 
     expr_attr_values.insert(":status".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(subscription.status.clone()));
     expr_attr_values.insert(":planId".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(plan_id.to_string()));
     expr_attr_values.insert(":currentPeriodEnd".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(current_period_end));
+    expr_attr_values.insert(":billingPeriod".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(billing_period.to_string()));
     expr_attr_values.insert(":updatedAt".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(now));
 
     // Handle promo code from discount
@@ -249,7 +275,7 @@ async fn handle_subscription_updated(
         .send()
         .await?;
 
-    info!("Updated subscription record for user: {}", user_id);
+    info!("Updated subscription record for user: {} with billing period: {}", user_id, billing_period);
     Ok(())
 }
 

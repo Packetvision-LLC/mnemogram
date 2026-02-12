@@ -626,6 +626,110 @@ components:
         - entity
         - state
 
+    Subscription:
+      type: object
+      properties:
+        userId:
+          type: string
+          description: User identifier
+        planId:
+          type: string
+          description: Current subscription plan identifier
+        planName:
+          type: string
+          description: Human-readable plan name
+        billingPeriod:
+          type: string
+          enum: [monthly, annual]
+          description: Billing period for the subscription
+        status:
+          type: string
+          enum: [active, cancelled, past_due, unpaid]
+          description: Current subscription status
+        currentPeriodEnd:
+          type: string
+          format: date-time
+          description: End date of the current billing period
+        nextRenewalDate:
+          type: string
+          format: date-time
+          description: Next renewal date
+        stripeCustomerId:
+          type: string
+          description: Stripe customer identifier
+        stripeSubscriptionId:
+          type: string
+          description: Stripe subscription identifier
+        promoCode:
+          type: string
+          nullable: true
+          description: Applied promo code, if any
+        createdAt:
+          type: string
+          format: date-time
+          description: When the subscription was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the subscription was last updated
+      required:
+        - userId
+        - planId
+        - planName
+        - billingPeriod
+        - status
+        - currentPeriodEnd
+        - createdAt
+        - updatedAt
+
+    CheckoutRequest:
+      type: object
+      properties:
+        priceId:
+          type: string
+          description: Stripe price identifier for the desired plan
+        billingPeriod:
+          type: string
+          enum: [monthly, annual]
+          description: Billing period for the subscription
+          default: monthly
+        promoCode:
+          type: string
+          nullable: true
+          description: Optional promo code to apply
+        successUrl:
+          type: string
+          nullable: true
+          description: URL to redirect to after successful payment
+        cancelUrl:
+          type: string
+          nullable: true
+          description: URL to redirect to if payment is cancelled
+      required:
+        - priceId
+
+    CheckoutResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          description: Stripe checkout session identifier
+        url:
+          type: string
+          description: URL to redirect user to complete payment
+      required:
+        - sessionId
+        - url
+
+    PortalResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          description: URL to redirect user to Stripe customer portal
+      required:
+        - url
+
 security:
   - BearerAuth: []
 
@@ -1567,3 +1671,139 @@ tags:
     description: API key management
   - name: Usage
     description: Usage statistics and analytics
+  /v1/billing/subscription:
+    get:
+      summary: Get subscription details
+      description: Retrieve current subscription information including plan, billing period, and status
+      operationId: getSubscription
+      tags:
+        - Billing
+      responses:
+        '200':
+          description: Subscription details
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/checkout:
+    post:
+      summary: Create checkout session
+      description: Create a Stripe checkout session for subscription upgrade or modification
+      operationId: createCheckoutSession
+      tags:
+        - Billing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+            example:
+              priceId: "price_1234567890"
+              billingPeriod: "annual"
+              promoCode: "SAVE20"
+      responses:
+        '200':
+          description: Checkout session created successfully
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutResponse'
+        '400':
+          description: Invalid request (invalid promo code, etc.)
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/billing/portal:
+    post:
+      summary: Create customer portal session
+      description: Create a Stripe customer portal session for subscription management
+      operationId: createPortalSession
+      tags:
+        - Billing
+      responses:
+        '200':
+          description: Portal session created successfully
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalResponse'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+tags:
+  - name: System
+    description: System health and status operations
+  - name: Memories
+    description: Memory file ingestion and management
+  - name: Search
+    description: Search operations within memories
+  - name: Recall
+    description: Recall operations across memories
+  - name: API Keys
+    description: API key management
+  - name: Usage
+    description: Usage statistics and analytics
+  - name: Billing
+    description: Subscription and billing operations
