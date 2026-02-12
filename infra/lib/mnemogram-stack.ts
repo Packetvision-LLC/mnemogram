@@ -275,6 +275,14 @@ export class MnemogramStack extends cdk.Stack {
       },
     });
 
+    // Add X-API-Version response header for all responses
+    const responseHeaders = {
+      "X-API-Version": "1.0"
+    };
+
+    // Create v1 API root resource for versioning
+    const v1Root = api.root.addResource("v1");
+
     const authorizer = new apigateway.TokenAuthorizer(this, "JwtAuthorizer", {
       handler: authorizerFn,
       identitySource: "method.request.header.Authorization",
@@ -282,80 +290,270 @@ export class MnemogramStack extends cdk.Stack {
     });
 
     // Routes
-    const statusResource = api.root.addResource("status");
+    const statusResource = v1Root.addResource("status");
     statusResource.addMethod(
       "GET",
-      new apigateway.LambdaIntegration(statusFn)
+      new apigateway.LambdaIntegration(statusFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      {
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
 
-    const memoriesResource = api.root.addResource("memories");
+    const memoriesResource = v1Root.addResource("memories");
     
-    // POST /memories - Create memory and get upload URL
+    // POST /v1/memories - Create memory and get upload URL
     memoriesResource.addMethod(
       "POST",
-      new apigateway.LambdaIntegration(ingestFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(ingestFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
     
-    // GET /memories - List user's memories
+    // GET /v1/memories - List user's memories
     memoriesResource.addMethod(
       "GET",
-      new apigateway.LambdaIntegration(manageFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(manageFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
     
-    // PUT /memories - Update existing memory (upload content)
+    // PUT /v1/memories - Update existing memory (upload content)
     memoriesResource.addMethod(
       "PUT",
-      new apigateway.LambdaIntegration(ingestFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(ingestFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
     
-    // DELETE /memories - Delete memory
+    // DELETE /v1/memories - Delete memory
     memoriesResource.addMethod(
       "DELETE",
-      new apigateway.LambdaIntegration(manageFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(manageFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
 
-    // POST /memories/{id}/search - Search within specific memory
+    // POST /v1/memories/{id}/search - Search within specific memory
     const memoryIdResource = memoriesResource.addResource("{id}");
     const memorySearchResource = memoryIdResource.addResource("search");
     memorySearchResource.addMethod(
       "POST",
-      new apigateway.LambdaIntegration(searchMemoryFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(searchMemoryFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
 
-    // GET /search - Search across memories (existing API)
-    const searchResource = api.root.addResource("search");
+    // GET /v1/search - Search across memories (existing API)
+    const searchResource = v1Root.addResource("search");
     searchResource.addMethod(
       "GET",
-      new apigateway.LambdaIntegration(searchFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(searchFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
 
-    // POST /recall - Recall across all memories
-    const recallResource = api.root.addResource("recall");
+    // POST /v1/recall - Recall across all memories
+    const recallResource = v1Root.addResource("recall");
     recallResource.addMethod(
       "POST",
-      new apigateway.LambdaIntegration(recallFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(recallFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
     
-    // GET /recall - Recall across all memories (existing API)
+    // GET /v1/recall - Recall across all memories (existing API)
     recallResource.addMethod(
       "GET",
-      new apigateway.LambdaIntegration(recallFn),
-      { authorizer }
+      new apigateway.LambdaIntegration(recallFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
 
-    // Webhook routes (no auth required)
+    // Webhook routes (no auth required) - keep at root level for backward compatibility
     const webhookResource = api.root.addResource("webhook");
     const stripeWebhookResource = webhookResource.addResource("stripe");
     stripeWebhookResource.addMethod(
       "POST",
-      new apigateway.LambdaIntegration(stripeWebhookFn)
+      new apigateway.LambdaIntegration(stripeWebhookFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      {
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
     );
 
     // ── Outputs ──────────────────────────────────────────────────────

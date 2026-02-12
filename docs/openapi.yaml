@@ -374,7 +374,7 @@ security:
   - BearerAuth: []
 
 paths:
-  /health:
+  /v1/health:
     get:
       summary: Health check
       description: Check the health status of the API and its dependencies
@@ -385,18 +385,30 @@ paths:
       responses:
         '200':
           description: Health status information
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthStatus'
         '503':
           description: Service unavailable
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /memories:
+  /v1/memories:
     post:
       summary: Ingest memory file
       description: Upload and ingest a .mv2 memory file
@@ -428,30 +440,60 @@ paths:
       responses:
         '201':
           description: Memory successfully ingested
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Memory'
         '400':
           description: Invalid request or file format
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '413':
           description: File too large
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '429':
           description: Rate limit exceeded
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
@@ -495,18 +537,30 @@ paths:
       responses:
         '200':
           description: List of memories
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MemoryList'
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /memories/{id}:
+  /v1/memories/{id}:
     get:
       summary: Get memory details
       description: Retrieve detailed information about a specific memory
@@ -524,18 +578,36 @@ paths:
       responses:
         '200':
           description: Memory details
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Memory'
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Memory not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
@@ -558,20 +630,38 @@ paths:
       responses:
         '204':
           description: Memory successfully deleted
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Memory not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /memories/{id}/search:
+  /v1/memories/{id}/search:
     post:
       summary: Search within memory
       description: Perform semantic search within a specific memory file
@@ -595,30 +685,54 @@ paths:
       responses:
         '200':
           description: Search results
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchResponse'
         '400':
           description: Invalid search request
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
           description: Memory not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /api-keys:
+  /v1/api-keys:
     post:
       summary: Generate API key
       description: Create a new API key for programmatic access
@@ -634,18 +748,36 @@ paths:
       responses:
         '201':
           description: API key created successfully
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiKeyResponse'
         '400':
           description: Invalid request
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
@@ -667,6 +799,12 @@ paths:
       responses:
         '200':
           description: List of API keys
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
@@ -684,12 +822,18 @@ paths:
                   - total
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /api-keys/{id}:
+  /v1/api-keys/{id}:
     delete:
       summary: Revoke API key
       description: Revoke (disable) an API key
@@ -707,20 +851,38 @@ paths:
       responses:
         '204':
           description: API key successfully revoked
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
           description: API key not found
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /usage:
+  /v1/usage:
     get:
       summary: Get usage statistics
       description: Retrieve usage statistics for the authenticated user
@@ -750,12 +912,24 @@ paths:
       responses:
         '200':
           description: Usage statistics
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/UsageStats'
         '401':
           description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
           content:
             application/json:
               schema:
