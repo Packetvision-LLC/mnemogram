@@ -32,6 +32,33 @@ export class MnemogramStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       versioned: true,
+      lifecycleRules: [
+        {
+          id: "TransitionToIA",
+          status: "Enabled",
+          transitions: [
+            {
+              storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+              transitionAfter: cdk.Duration.days(90),
+            },
+          ],
+        },
+        {
+          id: "TransitionToGlacier",
+          status: "Enabled",
+          transitions: [
+            {
+              storageClass: s3.StorageClass.GLACIER,
+              transitionAfter: cdk.Duration.days(365),
+            },
+          ],
+        },
+        {
+          id: "AbortIncompleteMultipartUploads",
+          status: "Enabled",
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+      ],
     });
 
     // DynamoDB billing mode based on stage
