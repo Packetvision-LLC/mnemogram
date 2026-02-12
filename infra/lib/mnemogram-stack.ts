@@ -12,8 +12,11 @@ import * as snsSubscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as backup from "aws-cdk-lib/aws-backup";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import { Construct } from "constructs";
 
 export interface MnemogramStackProps extends cdk.StackProps {
@@ -142,6 +145,36 @@ export class MnemogramStack extends cdk.Stack {
       pointInTimeRecovery: true,
     });
 
+    // ── SQS Queues ──────────────────────────────────────────────────
+
+    // Queue for triggering sketch building after memory ingestion
+    const sketchBuilderQueue = new sqs.Queue(this, "SketchBuilderQueue", {
+      queueName: `mnemogram-${stage}-sketch-builder`,
+      visibilityTimeout: cdk.Duration.minutes(15), // Give enough time for sketch building
+      retentionPeriod: cdk.Duration.days(14),
+      deadLetterQueue: {
+        queue: new sqs.Queue(this, "SketchBuilderDLQ", {
+          queueName: `mnemogram-${stage}-sketch-builder-dlq`,
+          retentionPeriod: cdk.Duration.days(14),
+        }),
+        maxReceiveCount: 3,
+      },
+    });
+
+    // Queue for triggering index rebuilds when frame threshold is reached
+    const indexRebuildQueue = new sqs.Queue(this, "IndexRebuildQueue", {
+      queueName: `mnemogram-${stage}-index-rebuild`,
+      visibilityTimeout: cdk.Duration.minutes(30), // Give enough time for index rebuilding
+      retentionPeriod: cdk.Duration.days(14),
+      deadLetterQueue: {
+        queue: new sqs.Queue(this, "IndexRebuildDLQ", {
+          queueName: `mnemogram-${stage}-index-rebuild-dlq`,
+          retentionPeriod: cdk.Duration.days(14),
+        }),
+        maxReceiveCount: 3,
+      },
+    });
+
     // ── Auth ─────────────────────────────────────────────────────────
 
     const userPool = new cognito.UserPool(this, "UserPool", {
@@ -216,6 +249,8 @@ export class MnemogramStack extends cdk.Stack {
         API_KEYS_TABLE: apiKeysTable.tableName,
         USAGE_TABLE: usageTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
+        SKETCH_BUILDER_QUEUE_URL: sketchBuilderQueue.queueUrl,
+        INDEX_REBUILD_QUEUE_URL: indexRebuildQueue.queueUrl,
       },
     };
 
@@ -317,11 +352,64 @@ export class MnemogramStack extends cdk.Stack {
       layers: [memvidLayer],
       timeout: cdk.Duration.minutes(2), // May need more time for large files
       memorySize: 512, // More memory for file processing
+      environment: {
+        ...lambdaDefaults.environment,
+        INDEX_REBUILD_QUEUE_URL: indexRebuildQueue.queueUrl,
+      },
+    });
+
+    // Maintenance Lambda for scheduled vacuum/compaction (MNEM-152)
+    const maintenanceFn = new lambda.Function(this, "MaintenanceFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-maintenance`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/maintenance"),
+      description: "Scheduled vacuum/compaction of .mv2 memory files",
+      layers: [memvidLayer],
+      timeout: cdk.Duration.minutes(15), // Long timeout for processing multiple memories
+      memorySize: 1024, // More memory for processing multiple files
+    });
+
+    // Sketch Builder Lambda for building sketch tracks (MNEM-153)
+    const sketchBuilderFn = new lambda.Function(this, "SketchBuilderFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-sketch-builder`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/sketch-builder"),
+      description: "Build sketch tracks for faster search pre-filtering",
+      layers: [memvidLayer],
+      timeout: cdk.Duration.minutes(10), // Timeout for sketch building
+      memorySize: 1024, // More memory for processing
     });
 
     // Add memvid layer to functions that need it
     searchMemoryFn.addLayers(memvidLayer);
     recallFn.addLayers(memvidLayer);
+
+    // ── EventBridge Schedule for Maintenance ────────────────────────
+
+    // Daily maintenance schedule (3 AM UTC) for vacuum/compaction (MNEM-152)
+    new events.Rule(this, "MaintenanceScheduleRule", {
+      ruleName: `mnemogram-${stage}-maintenance-schedule`,
+      description: "Trigger daily maintenance vacuum/compaction at 3 AM UTC",
+      schedule: events.Schedule.cron({
+        minute: "0",
+        hour: "3", // 3 AM UTC
+        day: "*",
+        month: "*",
+        year: "*",
+      }),
+      targets: [new targets.LambdaFunction(maintenanceFn)],
+    });
+
+    // ── SQS Event Sources ───────────────────────────────────────────
+
+    // Connect sketch builder to its SQS queue
+    sketchBuilderFn.addEventSource(new lambdaEventSources.SqsEventSource(sketchBuilderQueue, {
+      batchSize: 1, // Process one memory at a time for sketch building
+      maxBatchingWindow: cdk.Duration.seconds(5),
+    }));
+
+    // Connect index rebuild functionality to SQS queue (could be handled by maintenance or a separate function)
+    // For now, we'll let the validate-upload function handle index rebuilds directly via SQS messages
 
     // ── S3 Event Trigger for Upload Validation ─────────────────────
 
@@ -338,6 +426,10 @@ export class MnemogramStack extends cdk.Stack {
     memoryBucket.grantRead(searchMemoryFn);
     memoryBucket.grantReadWrite(ingestFn);
     memoryBucket.grantReadWrite(manageFn);
+    memoryBucket.grantReadWrite(validateUploadFn);
+    memoryBucket.grantReadWrite(maintenanceFn);
+    memoryBucket.grantReadWrite(sketchBuilderFn);
+    
     metadataTable.grantReadWriteData(ingestFn);
     metadataTable.grantReadData(searchFn);
     metadataTable.grantReadData(recallFn);
@@ -352,6 +444,9 @@ export class MnemogramStack extends cdk.Stack {
     memoriesTable.grantReadData(batchRecallFn);
     memoriesTable.grantReadData(searchMemoryFn);
     memoriesTable.grantReadWriteData(manageFn);
+    memoriesTable.grantReadWriteData(validateUploadFn);
+    memoriesTable.grantReadWriteData(maintenanceFn);
+    memoriesTable.grantReadWriteData(sketchBuilderFn);
     
     // Grant API keys table access to authorizer
     apiKeysTable.grantReadData(authorizerFn);
@@ -366,6 +461,12 @@ export class MnemogramStack extends cdk.Stack {
     usageTable.grantReadWriteData(recallFn);
     usageTable.grantReadWriteData(batchRecallFn);
     usageTable.grantReadWriteData(searchMemoryFn);
+
+    // Grant SQS permissions
+    sketchBuilderQueue.grantSendMessages(ingestFn); // Trigger sketch building after ingest
+    sketchBuilderQueue.grantConsumeMessages(sketchBuilderFn);
+    indexRebuildQueue.grantSendMessages(validateUploadFn); // Trigger index rebuild
+    indexRebuildQueue.grantSendMessages(maintenanceFn);
 
     // ── API Gateway ──────────────────────────────────────────────────
 
@@ -848,7 +949,7 @@ export class MnemogramStack extends cdk.Stack {
     // CloudWatch Alarms
     
     // Lambda error alarm for all functions
-    const lambdaFunctions = [statusFn, ingestFn, searchMemoryFn, searchFn, recallFn, batchRecallFn, manageFn, authorizerFn, stripeWebhookFn];
+    const lambdaFunctions = [statusFn, ingestFn, searchMemoryFn, searchFn, recallFn, batchRecallFn, manageFn, authorizerFn, stripeWebhookFn, validateUploadFn, maintenanceFn, sketchBuilderFn];
     
     lambdaFunctions.forEach((lambdaFunction, index) => {
       new cloudwatch.Alarm(this, `LambdaErrorAlarm${index}`, {
