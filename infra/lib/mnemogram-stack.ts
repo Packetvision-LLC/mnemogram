@@ -31,6 +31,40 @@ export class MnemogramStack extends cdk.Stack {
       pointInTimeRecovery: true,
     });
 
+    // DynamoDB table for subscription management
+    const subscriptionsTable = new dynamodb.Table(this, "SubscriptionsTable", {
+      tableName: "mnemogram-subscriptions",
+      partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecovery: true,
+    });
+
+    // DynamoDB table for API key management  
+    const apiKeysTable = new dynamodb.Table(this, "ApiKeysTable", {
+      tableName: "mnemogram-api-keys",
+      partitionKey: { name: "keyId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecovery: true,
+    });
+
+    // Add GSI on userId for API keys
+    apiKeysTable.addGlobalSecondaryIndex({
+      indexName: "userId-index",
+      partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+    });
+
+    // DynamoDB table for usage tracking
+    const usageTable = new dynamodb.Table(this, "UsageTable", {
+      tableName: "mnemogram-usage",
+      partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "date", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecovery: true,
+    });
+
     // ── Auth ─────────────────────────────────────────────────────────
 
     const userPool = new cognito.UserPool(this, "UserPool", {
@@ -60,14 +94,19 @@ export class MnemogramStack extends cdk.Stack {
     // Placeholder: these point to dummy code paths.
     // In CI/CD, cargo-lambda builds the binaries and CDK picks them up.
 
-    const lambdaDefaults: Partial<lambda.FunctionProps> = {
+    const lambdaDefaults: lambda.FunctionProps = {
       runtime: lambda.Runtime.PROVIDED_AL2023,
       architecture: lambda.Architecture.ARM_64,
       memorySize: 256,
       timeout: cdk.Duration.seconds(30),
+      handler: "bootstrap",
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/api-status"),
       environment: {
         MEMORY_BUCKET: memoryBucket.bucketName,
         METADATA_TABLE: metadataTable.tableName,
+        SUBSCRIPTIONS_TABLE: subscriptionsTable.tableName,
+        API_KEYS_TABLE: apiKeysTable.tableName,
+        USAGE_TABLE: usageTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
       },
     };
@@ -76,7 +115,6 @@ export class MnemogramStack extends cdk.Stack {
     const statusFn = new lambda.Function(this, "StatusFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-status",
-      handler: "bootstrap",
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-status", {
         // During synth without a build, use a dummy path fallback
       }),
@@ -87,7 +125,6 @@ export class MnemogramStack extends cdk.Stack {
     const ingestFn = new lambda.Function(this, "IngestFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-ingest",
-      handler: "bootstrap",
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-ingest"),
       description: "Ingest content into .mv2 memory files",
     });
@@ -96,7 +133,6 @@ export class MnemogramStack extends cdk.Stack {
     const searchFn = new lambda.Function(this, "SearchFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-search",
-      handler: "bootstrap",
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-search"),
       description: "Hybrid search over memory files",
     });
@@ -105,7 +141,6 @@ export class MnemogramStack extends cdk.Stack {
     const manageFn = new lambda.Function(this, "ManageFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-manage",
-      handler: "bootstrap",
       code: lambda.Code.fromAsset("../lambdas/target/lambda/api-manage"),
       description: "CRUD for memory files",
     });
@@ -114,9 +149,21 @@ export class MnemogramStack extends cdk.Stack {
     const authorizerFn = new lambda.Function(this, "AuthorizerFn", {
       ...lambdaDefaults,
       functionName: "mnemogram-authorizer",
-      handler: "bootstrap",
       code: lambda.Code.fromAsset("../lambdas/target/lambda/authorizer"),
       description: "JWT custom authorizer",
+    });
+
+    // Stripe webhook handler
+    const stripeWebhookFn = new lambda.Function(this, "StripeWebhookFn", {
+      ...lambdaDefaults,
+      functionName: "mnemogram-stripe-webhook",
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/stripe-webhook"),
+      description: "Stripe webhook event processor",
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        ...lambdaDefaults.environment,
+        STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || "",
+      },
     });
 
     // Grant permissions
@@ -126,6 +173,14 @@ export class MnemogramStack extends cdk.Stack {
     metadataTable.grantReadWriteData(ingestFn);
     metadataTable.grantReadData(searchFn);
     metadataTable.grantReadWriteData(manageFn);
+    
+    // Grant DynamoDB permissions for new tables
+    subscriptionsTable.grantReadWriteData(stripeWebhookFn);
+    subscriptionsTable.grantReadData(manageFn);
+    apiKeysTable.grantReadWriteData(manageFn);
+    usageTable.grantReadWriteData(manageFn);
+    usageTable.grantReadWriteData(ingestFn);
+    usageTable.grantReadWriteData(searchFn);
 
     // ── API Gateway ──────────────────────────────────────────────────
 
@@ -178,6 +233,14 @@ export class MnemogramStack extends cdk.Stack {
       "GET",
       new apigateway.LambdaIntegration(searchFn),
       { authorizer }
+    );
+
+    // Webhook routes (no auth required)
+    const webhookResource = api.root.addResource("webhook");
+    const stripeWebhookResource = webhookResource.addResource("stripe");
+    stripeWebhookResource.addMethod(
+      "POST",
+      new apigateway.LambdaIntegration(stripeWebhookFn)
     );
 
     // ── Outputs ──────────────────────────────────────────────────────
