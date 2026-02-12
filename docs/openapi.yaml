@@ -5,16 +5,16 @@ info:
   version: 1.0.0
   contact:
     name: Mnemogram Team
-    url: https://mnemogram.com
-    email: support@mnemogram.com
+    url: https://mnemogram.ai
+    email: support@mnemogram.ai
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
 
 servers:
-  - url: https://api.mnemogram.com/v1
+  - url: https://api.mnemogram.ai/v1
     description: Production server
-  - url: https://staging-api.mnemogram.com/v1
+  - url: https://staging-api.mnemogram.ai/v1
     description: Staging server
 
 components:
