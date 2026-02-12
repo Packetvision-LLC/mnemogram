@@ -1,0 +1,44 @@
+{
+  "name": "memvid-cli",
+  "version": "2.0.153",
+  "description": "AI memory CLI - crash-safe, single-file storage with semantic search",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/memvid/memvid"
+  },
+  "homepage": "https://memvid.com",
+  "keywords": [
+    "ai",
+    "memory",
+    "cli",
+    "vector-search",
+    "semantic-search",
+    "rag",
+    "embeddings",
+    "rust",
+    "pdf",
+    "extractous"
+  ],
+  "bin": {
+    "memvid": "bin/memvid"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "optionalDependencies": {
+    "@memvid/cli-darwin-arm64": "2.0.153",
+    "@memvid/cli-darwin-x64": "2.0.153",
+    "@memvid/cli-linux-x64": "2.0.153",
+    "@memvid/cli-linux-arm64": "2.0.153",
+    "@memvid/cli-win32-x64": "2.0.153"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}

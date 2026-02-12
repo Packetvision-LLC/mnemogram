@@ -67,7 +67,14 @@ impl MemvidClient {
     pub async fn search(&self, memory_id: &str, query: &str, top_k: usize) -> Result<Vec<MemvidSearchResult>, MnemogramError> {
         let temp_file: NamedTempFile = self.download_mv2_file(memory_id).await?;
         
-        let output = AsyncCommand::new("/home/stuart/.npm-global/bin/memvid")
+        // Use Lambda layer path if available, fallback to local path
+        let memvid_path = if Path::new("/opt/bin/memvid").exists() {
+            "/opt/bin/memvid"
+        } else {
+            "/home/stuart/.npm-global/bin/memvid"
+        };
+        
+        let output = AsyncCommand::new(memvid_path)
             .arg("find")
             .arg("--query")
             .arg(query)
@@ -96,7 +103,14 @@ impl MemvidClient {
     pub async fn ask(&self, memory_id: &str, question: &str, top_k: usize) -> Result<MemvidAskResult, MnemogramError> {
         let temp_file: NamedTempFile = self.download_mv2_file(memory_id).await?;
         
-        let output = AsyncCommand::new("/home/stuart/.npm-global/bin/memvid")
+        // Use Lambda layer path if available, fallback to local path
+        let memvid_path = if Path::new("/opt/bin/memvid").exists() {
+            "/opt/bin/memvid"
+        } else {
+            "/home/stuart/.npm-global/bin/memvid"
+        };
+        
+        let output = AsyncCommand::new(memvid_path)
             .arg("ask")
             .arg("--question")
             .arg(question)
@@ -224,12 +238,18 @@ impl MemvidClient {
 
 /// Check if memvid CLI is available
 pub fn is_memvid_cli_available() -> bool {
-    Path::new("/home/stuart/.npm-global/bin/memvid").exists()
+    Path::new("/opt/bin/memvid").exists() || Path::new("/home/stuart/.npm-global/bin/memvid").exists()
 }
 
 /// Get memvid CLI version
 pub fn get_memvid_version() -> Result<String, MnemogramError> {
-    let output = Command::new("/home/stuart/.npm-global/bin/memvid")
+    let memvid_path = if Path::new("/opt/bin/memvid").exists() {
+        "/opt/bin/memvid"
+    } else {
+        "/home/stuart/.npm-global/bin/memvid"
+    };
+    
+    let output = Command::new(memvid_path)
         .arg("--version")
         .output()
         .map_err(|e| MnemogramError::ExternalService(format!("Failed to get memvid version: {}", e)))?;

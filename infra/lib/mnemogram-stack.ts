@@ -1,5 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3n from "aws-cdk-lib/aws-s3-notifications";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -296,6 +297,39 @@ export class MnemogramStack extends cdk.Stack {
         STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || "",
       },
     });
+
+    // ── Lambda Layer for MemVid CLI ─────────────────────────────────
+
+    const memvidLayer = new lambda.LayerVersion(this, "MemvidLayer", {
+      layerVersionName: `mnemogram-${stage}-memvid-cli`,
+      code: lambda.Code.fromAsset("../layers/memvid-cli"),
+      description: "MemVid CLI binary and dependencies for .mv2 file operations",
+      compatibleRuntimes: [lambda.Runtime.PROVIDED_AL2023],
+      compatibleArchitectures: [lambda.Architecture.ARM_64],
+    });
+
+    // Validate Upload (S3 triggered)
+    const validateUploadFn = new lambda.Function(this, "ValidateUploadFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-validate-upload`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/validate-upload"),
+      description: "Validate uploaded .mv2 files on S3 PUT events",
+      layers: [memvidLayer],
+      timeout: cdk.Duration.minutes(2), // May need more time for large files
+      memorySize: 512, // More memory for file processing
+    });
+
+    // Add memvid layer to functions that need it
+    searchMemoryFn.addLayers(memvidLayer);
+    recallFn.addLayers(memvidLayer);
+
+    // ── S3 Event Trigger for Upload Validation ─────────────────────
+
+    memoryBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(validateUploadFn),
+      { prefix: "memories/", suffix: ".mv2" }
+    );
 
     // Grant permissions
     memoryBucket.grantRead(searchFn);
