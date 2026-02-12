@@ -115,6 +115,35 @@ cargo lambda invoke api-status --data-ascii '{"httpMethod":"GET","path":"/status
 | `DELETE` | `/memories` | api-manage | JWT | Delete memory files |
 | `GET` | `/search` | api-search | JWT | Hybrid search over memories |
 
+## CI/CD
+
+GitHub Actions workflows in `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|----------|---------|-------------|
+| **ci.yml** | PR & push to main | `cargo fmt`, `clippy`, `test` + CDK `build` & `synth` |
+| **deploy.yml** | Push to main | Build Lambdas → CDK deploy (OIDC, manual approval) |
+| **rust-audit.yml** | Weekly (Monday) | `cargo audit` security scan |
+
+### Quick Commands (Makefile)
+
+```bash
+make build    # Build all Lambdas with cargo-lambda
+make test     # Run Rust tests
+make lint     # clippy + fmt check
+make fmt      # Auto-format Rust code
+make synth    # CDK synth
+make deploy   # Build + CDK deploy
+```
+
+### Deploy Setup
+
+The deploy workflow uses OIDC federation — no long-lived AWS keys. You need to:
+
+1. Create an IAM role with GitHub OIDC trust policy (`arn:aws:iam::ACCOUNT_ID:role/mnemogram-github-deploy`)
+2. Add a `production` environment in GitHub repo settings (for the approval gate)
+3. Update the `AWS_ROLE_ARN` in `deploy.yml` with your actual account ID
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
