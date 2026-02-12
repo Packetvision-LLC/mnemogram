@@ -82,11 +82,11 @@ pub struct ErrorResponse {
 }
 
 impl ErrorResponse {
-    pub fn new(error: &MnemogramError, request_id: String) -> Self {
+    pub fn new(error: &MnemogramError, request_id: &str) -> Self {
         Self {
             error: error.to_string(),
             code: error.error_code().to_string(),
-            request_id,
+            request_id: request_id.to_string(),
             details: None,
         }
     }

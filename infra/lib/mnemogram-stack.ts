@@ -37,7 +37,7 @@ export class MnemogramStack extends cdk.Stack {
       lifecycleRules: [
         {
           id: "TransitionToIA",
-          status: "Enabled",
+          enabled: true,
           transitions: [
             {
               storageClass: s3.StorageClass.INFREQUENT_ACCESS,
@@ -47,7 +47,7 @@ export class MnemogramStack extends cdk.Stack {
         },
         {
           id: "TransitionToGlacier",
-          status: "Enabled",
+          enabled: true,
           transitions: [
             {
               storageClass: s3.StorageClass.GLACIER,
@@ -57,7 +57,7 @@ export class MnemogramStack extends cdk.Stack {
         },
         {
           id: "AbortIncompleteMultipartUploads",
-          status: "Enabled",
+          enabled: true,
           abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
         },
       ],
@@ -215,7 +215,6 @@ export class MnemogramStack extends cdk.Stack {
         API_KEYS_TABLE: apiKeysTable.tableName,
         USAGE_TABLE: usageTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
-        _X_AMZN_TRACE_ID: "placeholder", // This will be set by Lambda runtime
       },
     };
 
@@ -350,8 +349,6 @@ export class MnemogramStack extends cdk.Stack {
           responseLength: true,
           status: true,
           user: true,
-          requestId: true,
-          requestHeaders: false,
         }),
       },
       defaultCorsPreflightOptions: {
@@ -471,9 +468,10 @@ export class MnemogramStack extends cdk.Stack {
     });
 
     // Update the IP set reference in the rule to use the actual ARN
-    const ipSetRule = webAcl.rules?.[3] as any;
-    if (ipSetRule) {
-      ipSetRule.statement.ipSetReferenceStatement.arn = blockedIpSet.attrArn;
+    // Note: This is a workaround for the TypeScript typing issue
+    const webAclRules = webAcl.rules as any[];
+    if (webAclRules && webAclRules[3]) {
+      webAclRules[3].statement.ipSetReferenceStatement.arn = blockedIpSet.attrArn;
     }
 
     // Associate WAF WebACL with API Gateway
@@ -901,7 +899,7 @@ export class MnemogramStack extends cdk.Stack {
       backupPlanName: `mnemogram-${stage}-backup-plan`,
       backupVault,
       backupPlanRules: [
-        {
+        new backup.BackupPlanRule({
           ruleName: "DailyBackups",
           scheduleExpression: events.Schedule.cron({
             minute: "0",
@@ -910,7 +908,7 @@ export class MnemogramStack extends cdk.Stack {
           deleteAfter: cdk.Duration.days(30), // Keep backups for 30 days
           startWindow: cdk.Duration.hours(1),
           completionWindow: cdk.Duration.hours(8),
-        },
+        }),
       ],
     });
 
@@ -926,8 +924,6 @@ export class MnemogramStack extends cdk.Stack {
 
     // Add all DynamoDB tables to backup selection
     backupPlan.addSelection("DynamoDBBackupSelection", {
-      selectionName: `mnemogram-${stage}-dynamodb-selection`,
-      role: backupRole,
       resources: [
         backup.BackupResource.fromDynamoDbTable(metadataTable),
         backup.BackupResource.fromDynamoDbTable(memoriesTable),
@@ -935,11 +931,7 @@ export class MnemogramStack extends cdk.Stack {
         backup.BackupResource.fromDynamoDbTable(apiKeysTable),
         backup.BackupResource.fromDynamoDbTable(usageTable),
       ],
-      conditions: {
-        stringEquals: {
-          "aws:ResourceTag/BackupEnabled": "true",
-        },
-      },
+      role: backupRole,
     });
 
     // Tag all tables to include them in backup

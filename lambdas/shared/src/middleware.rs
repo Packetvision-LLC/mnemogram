@@ -1,6 +1,5 @@
 use crate::errors::{ErrorResponse, MnemogramError};
 use lambda_runtime::{Context, LambdaEvent};
-use serde_json::Value;
 use std::future::Future;
 use tracing::{error, info, warn};
 
@@ -64,7 +63,7 @@ where
             }
 
             // Create error response
-            let error_response = ErrorResponse::new(&err, request_id);
+            let error_response = ErrorResponse::new(&err, &request_id);
             let error_json = serde_json::to_value(error_response)
                 .unwrap_or_else(|_| serde_json::json!({
                     "error": "Failed to serialize error response",
@@ -155,7 +154,7 @@ where
             }
 
             // Create error response
-            let error_response = ErrorResponse::new(&err, request_id.clone());
+            let error_response = ErrorResponse::new(&err, &request_id);
             let error_json = serde_json::to_string(&error_response)
                 .unwrap_or_else(|_| r#"{"error": "Serialization failed", "code": "SERIALIZATION_ERROR"}"#.to_string());
 

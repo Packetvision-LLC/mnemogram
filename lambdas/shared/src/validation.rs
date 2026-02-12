@@ -1,6 +1,5 @@
 use crate::errors::MnemogramError;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Input validation helper functions
 pub struct Validator;
