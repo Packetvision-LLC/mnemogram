@@ -1,0 +1,26 @@
+[package]
+name = "batch-recall"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+shared = { path = "../shared" }
+lambda_http.workspace = true
+lambda_runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
+aws-sdk-dynamodb.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# Note: memvid-core integration pending
+# memvid-core = "0.1"  # TODO: Add when available

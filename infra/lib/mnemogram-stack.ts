@@ -260,6 +260,14 @@ export class MnemogramStack extends cdk.Stack {
       description: "Broader recall across all user memories",
     });
 
+    // Batch Recall
+    const batchRecallFn = new lambda.Function(this, "BatchRecallFn", {
+      ...lambdaDefaults,
+      functionName: `mnemogram-${stage}-batch-recall`,
+      code: lambda.Code.fromAsset("../lambdas/target/lambda/batch-recall"),
+      description: "Batch recall across all user memories",
+    });
+
     // Manage
     const manageFn = new lambda.Function(this, "ManageFn", {
       ...lambdaDefaults,
@@ -292,12 +300,14 @@ export class MnemogramStack extends cdk.Stack {
     // Grant permissions
     memoryBucket.grantRead(searchFn);
     memoryBucket.grantRead(recallFn);
+    memoryBucket.grantRead(batchRecallFn);
     memoryBucket.grantRead(searchMemoryFn);
     memoryBucket.grantReadWrite(ingestFn);
     memoryBucket.grantReadWrite(manageFn);
     metadataTable.grantReadWriteData(ingestFn);
     metadataTable.grantReadData(searchFn);
     metadataTable.grantReadData(recallFn);
+    metadataTable.grantReadData(batchRecallFn);
     metadataTable.grantReadData(searchMemoryFn);
     metadataTable.grantReadWriteData(manageFn);
     
@@ -305,6 +315,7 @@ export class MnemogramStack extends cdk.Stack {
     memoriesTable.grantReadWriteData(ingestFn);
     memoriesTable.grantReadData(searchFn);
     memoriesTable.grantReadData(recallFn);
+    memoriesTable.grantReadData(batchRecallFn);
     memoriesTable.grantReadData(searchMemoryFn);
     memoriesTable.grantReadWriteData(manageFn);
     
@@ -319,6 +330,7 @@ export class MnemogramStack extends cdk.Stack {
     usageTable.grantReadWriteData(ingestFn);
     usageTable.grantReadWriteData(searchFn);
     usageTable.grantReadWriteData(recallFn);
+    usageTable.grantReadWriteData(batchRecallFn);
     usageTable.grantReadWriteData(searchMemoryFn);
 
     // ── API Gateway ──────────────────────────────────────────────────
@@ -734,6 +746,33 @@ export class MnemogramStack extends cdk.Stack {
       }
     );
 
+    // POST /v1/batch-recall - Batch recall across all memories
+    const batchRecallResource = v1Root.addResource("batch-recall");
+    batchRecallResource.addMethod(
+      "POST",
+      new apigateway.LambdaIntegration(batchRecallFn, {
+        integrationResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": `'1.0'`,
+            },
+          },
+        ],
+      }),
+      { 
+        authorizer,
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseParameters: {
+              "method.response.header.X-API-Version": true,
+            },
+          },
+        ],
+      }
+    );
+
     // Webhook routes (no auth required) - keep at root level for backward compatibility
     const webhookResource = api.root.addResource("webhook");
     const stripeWebhookResource = webhookResource.addResource("stripe");
@@ -775,7 +814,7 @@ export class MnemogramStack extends cdk.Stack {
     // CloudWatch Alarms
     
     // Lambda error alarm for all functions
-    const lambdaFunctions = [statusFn, ingestFn, searchMemoryFn, searchFn, recallFn, manageFn, authorizerFn, stripeWebhookFn];
+    const lambdaFunctions = [statusFn, ingestFn, searchMemoryFn, searchFn, recallFn, batchRecallFn, manageFn, authorizerFn, stripeWebhookFn];
     
     lambdaFunctions.forEach((lambdaFunction, index) => {
       new cloudwatch.Alarm(this, `LambdaErrorAlarm${index}`, {

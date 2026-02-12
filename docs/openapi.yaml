@@ -146,27 +146,110 @@ components:
         - content
         - score
 
-    SearchResponse:
+    RecallResult:
+      type: object
+      properties:
+        memoryId:
+          type: string
+          description: Unique identifier for the memory
+        memoryName:
+          type: string
+          description: Human-readable name of the memory
+        timestamp:
+          type: string
+          nullable: true
+          description: Timestamp within the memory (e.g., "00:02:15")
+        snippet:
+          type: string
+          description: Relevant content excerpt from the memory
+        score:
+          type: number
+          format: float
+          description: Similarity score (0.0 to 1.0)
+        createdAt:
+          type: string
+          format: date-time
+          description: When the memory was created
+      required:
+        - memoryId
+        - memoryName
+        - snippet
+        - score
+        - createdAt
+
+    RecallRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Search query string
+        memoryId:
+          type: string
+          nullable: true
+          description: Optional memory ID to search within (if not provided, searches all memories)
+      required:
+        - query
+
+    RecallResponse:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The original search query
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecallResult'
+        total:
+          type: integer
+          description: Total number of results found
+      required:
+        - query
+        - results
+        - total
+
+    BatchRecallRequest:
+      type: object
+      properties:
+        queries:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 10
+          description: Array of search query strings (max 10)
+        memoryId:
+          type: string
+          nullable: true
+          description: Optional memory ID to search within (if not provided, searches all memories)
+      required:
+        - queries
+
+    BatchRecallQueryResult:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The search query
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecallResult'
+          description: Matching results for this query
+      required:
+        - query
+        - matches
+
+    BatchRecallResponse:
       type: object
       properties:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/SearchResult'
-        total:
-          type: integer
-          description: Total number of results found
-        query:
-          type: string
-          description: The original search query
-        processedAt:
-          type: string
-          format: date-time
-          description: When the search was processed
+            $ref: '#/components/schemas/BatchRecallQueryResult'
+          description: Results for each query in the batch
       required:
         - results
-        - total
-        - query
 
     ApiKey:
       type: object
@@ -935,6 +1018,132 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /v1/recall:
+    post:
+      summary: Recall across memories
+      description: Search for content across all user memories or within a specific memory
+      operationId: recallMemories
+      tags:
+        - Recall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecallRequest'
+      responses:
+        '200':
+          description: Recall results
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecallResponse'
+        '400':
+          description: Invalid request
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/batch-recall:
+    post:
+      summary: Batch recall across memories
+      description: Search for multiple queries across all user memories or within a specific memory in a single request
+      operationId: batchRecallMemories
+      tags:
+        - Recall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchRecallRequest'
+            example:
+              queries:
+                - "machine learning concepts"
+                - "data processing pipeline"
+                - "authentication methods"
+              memoryId: "123e4567-e89b-12d3-a456-426614174000"
+      responses:
+        '200':
+          description: Batch recall results
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchRecallResponse'
+            example:
+              results:
+                - query: "machine learning concepts"
+                  matches:
+                    - memoryId: "123e4567-e89b-12d3-a456-426614174000"
+                      memoryName: "AI Research Notes"
+                      timestamp: "00:15:30"
+                      snippet: "Neural networks are a fundamental concept in machine learning..."
+                      score: 0.95
+                      createdAt: "2024-01-15T10:30:00Z"
+                - query: "data processing pipeline"
+                  matches:
+                    - memoryId: "456e7890-e12b-34d5-a789-426614174111"
+                      memoryName: "ETL Documentation"
+                      timestamp: "00:05:20"
+                      snippet: "The data processing pipeline consists of extraction, transformation..."
+                      score: 0.88
+                      createdAt: "2024-01-14T14:20:00Z"
+        '400':
+          description: Invalid request (empty queries, too many queries, etc.)
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          headers:
+            X-API-Version:
+              description: API version
+              schema:
+                type: string
+                example: "1.0"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 tags:
   - name: System
     description: System health and status operations
@@ -942,6 +1151,8 @@ tags:
     description: Memory file ingestion and management
   - name: Search
     description: Search operations within memories
+  - name: Recall
+    description: Recall operations across memories
   - name: API Keys
     description: API key management
   - name: Usage

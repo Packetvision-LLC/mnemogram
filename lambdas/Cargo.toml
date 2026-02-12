@@ -9,6 +9,7 @@ members = [
     "authorizer",
     "stripe-webhook",
     "recall",
+    "batch-recall",
     "ingest",
     "search",
 ]
