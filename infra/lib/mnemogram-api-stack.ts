@@ -19,6 +19,27 @@ export class MnemogramApiStack extends cdk.Stack {
     const stage = props.stage;
     const domainName = `api.mnemogram.ai`;
 
+    // ── Lambda Authorizer ──────────────────────────────────────────
+
+    const authorizerFn = new lambda.Function(this, "AuthorizerFn", {
+      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      handler: "bootstrap",
+      code: lambda.Code.fromAsset("../target/lambda/authorizer"),
+      environment: {
+        ...commonEnv,
+        USERS_TABLE: `mnemogram-${stage}-users`,
+      },
+      timeout: cdk.Duration.seconds(10),
+    });
+
+    // Grant DynamoDB read access to authorizer
+    // Note: Users table should be created in main MnemogramStack
+    // authorizerFn.addToRolePolicy(new iam.PolicyStatement({
+    //   effect: iam.Effect.ALLOW,
+    //   actions: ["dynamodb:Query"],
+    //   resources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/mnemogram-${stage}-users*`],
+    // }));
+
     // ── Lambda Functions (API-only) ──────────────────────────────────
 
     const commonEnv = {
@@ -83,6 +104,14 @@ export class MnemogramApiStack extends cdk.Stack {
 
     // ── API Gateway ─────────────────────────────────────────────────
 
+    // Create Lambda authorizer for subscriber validation
+    const authorizer = new apigateway.TokenAuthorizer(this, "SubscriberAuthorizer", {
+      handler: authorizerFn,
+      identitySource: "method.request.header.Authorization",
+      authorizerName: `mnemogram-${stage}-subscriber-auth`,
+      resultsCacheTtl: cdk.Duration.minutes(5), // Cache auth results for 5 minutes
+    });
+
     const api = new apigateway.RestApi(this, "MnemogramApi", {
       restApiName: `mnemogram-api-${stage}`,
       description: "Mnemogram Memory API",
@@ -128,41 +157,41 @@ export class MnemogramApiStack extends cdk.Stack {
     const statusResource = api.root.addResource("status");
     statusResource.addMethod("GET", new apigateway.LambdaIntegration(statusFn));
 
-    // V1 API routes (require API key)
+    // V1 API routes (require subscriber authentication)
     const v1Resource = api.root.addResource("v1");
 
     const ingestResource = v1Resource.addResource("ingest");
     ingestResource.addMethod("POST", new apigateway.LambdaIntegration(ingestFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
 
     const searchResource = v1Resource.addResource("search");
     searchResource.addMethod("POST", new apigateway.LambdaIntegration(searchFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
 
     const cardsResource = v1Resource.addResource("cards");
     cardsResource.addMethod("GET", new apigateway.LambdaIntegration(cardsFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
     cardsResource.addMethod("POST", new apigateway.LambdaIntegration(cardsFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
 
     const factsResource = v1Resource.addResource("facts");
     factsResource.addMethod("GET", new apigateway.LambdaIntegration(factsFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
     factsResource.addMethod("POST", new apigateway.LambdaIntegration(factsFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
 
     const stateResource = v1Resource.addResource("state");
     stateResource.addMethod("GET", new apigateway.LambdaIntegration(stateFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
     stateResource.addMethod("PUT", new apigateway.LambdaIntegration(stateFn), {
-      apiKeyRequired: true,
+      authorizer: authorizer,
     });
 
     // ── SSL Certificate ─────────────────────────────────────────────
