@@ -172,11 +172,15 @@ export class MnemogramApiStack extends cdk.Stack {
       domainName: "mnemogram.ai",
     });
 
-    // Certificate for api.mnemogram.ai (must be in us-east-1 for CloudFront)
-    const certificate = new certificatemanager.Certificate(this, "ApiCertificate", {
-      domainName: domainName,
-      validation: certificatemanager.CertificateValidation.fromDns(hostedZone),
-    });
+    // Use existing wildcard certificate for *.mnemogram.ai
+    const certificate = certificatemanager.Certificate.fromCertificateArn(
+      this, 
+      "WildcardCertificate",
+      // Look up existing wildcard certificate by domain name
+      certificatemanager.Certificate.fromLookup(this, "ExistingWildcardCert", {
+        domainName: "*.mnemogram.ai",
+      }).certificateArn
+    );
 
     // ── CloudFront Distribution ─────────────────────────────────────
 
