@@ -202,7 +202,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Convert memvid results to API format
     let results: Vec<SearchResult> = memvid_results
         .into_iter()
-        .map(|mut result| {
+        .map(|result| {
             let mut search_result = SearchResult::from(result);
             search_result.memory_id = memory_id.to_string();
             search_result

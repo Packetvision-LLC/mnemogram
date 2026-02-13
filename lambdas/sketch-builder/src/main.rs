@@ -1,9 +1,9 @@
 use aws_config::BehaviorVersion;
-use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_s3::Client as S3Client;
-use lambda_runtime::{service_fn, Context, Error, LambdaEvent};
+use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use shared::memvid::MemvidClient;
+use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
@@ -18,7 +18,7 @@ struct SketchBuilderEvent {
 #[derive(Debug, Deserialize)]
 struct EventRecord {
     #[serde(rename = "eventSource")]
-    event_source: Option<String>,
+    _event_source: Option<String>,
     
     // For SQS messages
     body: Option<String>,
@@ -36,7 +36,7 @@ struct DynamoDbStreamRecord {
     #[serde(rename = "NewImage")]
     new_image: Option<serde_json::Value>,
     #[serde(rename = "Keys")]
-    keys: Option<serde_json::Value>,
+    _keys: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,9 +44,9 @@ struct SqsMessageBody {
     #[serde(rename = "memoryId")]
     memory_id: String,
     #[serde(rename = "userId")]
-    user_id: Option<String>,
+    _user_id: Option<String>,
     #[serde(rename = "triggerType")]
-    trigger_type: Option<String>,
+    _trigger_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,7 +196,7 @@ struct SketchBuildResult {
 }
 
 async fn build_sketch_tracks(
-    memvid_client: &MemvidClient,
+    _memvid_client: &MemvidClient,
     s3_client: &S3Client,
     memory_id: &str,
     bucket_name: &str,

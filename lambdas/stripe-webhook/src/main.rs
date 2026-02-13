@@ -1,7 +1,7 @@
 use aws_sdk_dynamodb::Client as DynamoClient;
 use chrono::{DateTime, Utc};
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 use tracing::{error, info, warn};
@@ -153,7 +153,7 @@ async fn handle_checkout_completed(
         .metadata
         .as_ref()
         .and_then(|m| m.get("billingPeriod"))
-        .unwrap_or("monthly")
+        .map_or("monthly", |v| v.as_str())
         .to_string();
 
     // Extract promo code info if available
@@ -326,7 +326,7 @@ async fn handle_invoice_payment_succeeded(
 }
 
 async fn handle_invoice_payment_failed(
-    dynamo: &DynamoClient,
+    _dynamo: &DynamoClient,
     invoice: Invoice,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Processing invoice.payment_failed for invoice: {}", invoice.id);

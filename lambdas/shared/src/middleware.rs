@@ -93,7 +93,6 @@ where
     I: serde::Serialize,
 {
     use lambda_http::{Body, Response};
-    use std::collections::HashMap;
 
     let context = event.context.clone();
     let request_id = context.request_id.clone();

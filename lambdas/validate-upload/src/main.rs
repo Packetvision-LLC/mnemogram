@@ -4,10 +4,10 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use shared::memvid::MemvidClient;
 use shared::errors::MnemogramError;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
@@ -71,7 +71,7 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
     // Optional SQS queue for triggering index rebuilds
     let index_rebuild_queue_url = std::env::var("INDEX_REBUILD_QUEUE_URL").ok();
 
-    let memvid_client = MemvidClient::new(s3_client.clone(), "".to_string()); // bucket will be set per record
+    let _memvid_client = MemvidClient::new(s3_client.clone(), "".to_string()); // bucket will be set per record
 
     for record in event.payload.records {
         if !record.event_name.starts_with("ObjectCreated") {

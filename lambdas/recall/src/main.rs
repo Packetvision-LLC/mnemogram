@@ -5,7 +5,6 @@ use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shared::memvid::{MemvidClient, MemvidSearchResult};
-use shared::errors::MnemogramError;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
@@ -126,8 +125,8 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
     
     // Use a query to find all memories for the user
-    let key_condition = "#userId = :userId";
-    let filter_condition = "#status = :status1 OR #status = :status2";
+    let _key_condition = "#userId = :userId";
+    let _filter_condition = "#status = :status1 OR #status = :status2";
     
     let mut expression_attribute_names = HashMap::new();
     expression_attribute_names.insert("#userId".to_string(), "userId".to_string());

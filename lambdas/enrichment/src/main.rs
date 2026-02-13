@@ -1,9 +1,10 @@
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_s3::Client as S3Client;
-use lambda_runtime::{service_fn, Context, Error, LambdaEvent};
+use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use shared::memvid::MemvidClient;
+use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
@@ -19,7 +20,7 @@ struct EnrichmentEvent {
 #[derive(Debug, Deserialize)]
 struct EventRecord {
     #[serde(rename = "eventSource")]
-    event_source: Option<String>,
+    _event_source: Option<String>,
     
     // For SQS messages
     body: Option<String>,
@@ -67,7 +68,7 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
     let bucket_name = std::env::var("MEMORY_BUCKET")
         .map_err(|_| "MEMORY_BUCKET environment variable not set")?;
     
-    let subscriptions_table = std::env::var("SUBSCRIPTIONS_TABLE")
+    let _subscriptions_table = std::env::var("SUBSCRIPTIONS_TABLE")
         .map_err(|_| "SUBSCRIPTIONS_TABLE environment variable not set")?;
 
     let memories_table = std::env::var("MEMORIES_TABLE")
@@ -84,7 +85,8 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
     for record in event.payload.records {
         let enrichment_requests = extract_enrichment_requests_from_record(&record)?;
         
-        for req in enrichment_requests {
+        for sqs_msg in enrichment_requests {
+            let req = EnrichmentRequest::from(sqs_msg);
             info!("Processing memory {} for enrichment", req.memory_id);
 
             // Update enrichment status to 'processing'
@@ -202,7 +204,7 @@ async fn update_memory_status(
 
 struct EnrichmentRequest {
     memory_id: String,
-    user_id: String,
+    _user_id: String,
     subscription_tier: Option<String>,
 }
 
@@ -210,14 +212,14 @@ impl From<SqsMessageBody> for EnrichmentRequest {
     fn from(body: SqsMessageBody) -> Self {
         EnrichmentRequest {
             memory_id: body.memory_id,
-            user_id: body.user_id,
+            _user_id: body.user_id,
             subscription_tier: body.subscription_tier,
         }
     }
 }
 
 async fn enrich_memory(
-    memvid_client: &MemvidClient,
+    _memvid_client: &MemvidClient,
     s3_client: &S3Client,
     request: &EnrichmentRequest,
     bucket_name: &str,

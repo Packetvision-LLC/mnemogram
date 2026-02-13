@@ -2,7 +2,7 @@ use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_s3 as s3;
 use chrono::Utc;
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde_json::json;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;

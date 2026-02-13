@@ -3,11 +3,12 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_s3::Client as S3Client;
 use chrono::{DateTime, Utc};
-use lambda_runtime::{service_fn, Context, Error, LambdaEvent};
+use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use shared::memvid::MemvidClient;
-use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
+use std::collections::HashMap;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tracing::{info, warn, error};
@@ -43,7 +44,7 @@ struct MemoryProcessResult {
     error_message: Option<String>,
 }
 
-async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResult, Error> {
+async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResult, Error> {
     info!("Starting maintenance vacuum/compaction process");
 
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
@@ -83,12 +84,12 @@ async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResu
     let seven_days_ago = now - chrono::Duration::days(7);
 
     loop {
-        let items = scan_result.items().unwrap_or(&[]);
+        let items = scan_result.items();
         
         for item in items {
-            let memory_id = item
+            let memory_id: String = item
                 .get("memoryId")
-                .and_then(|v| v.as_s().ok())
+                .and_then(|v: &AttributeValue| v.as_s().ok())
                 .cloned()
                 .unwrap_or_default();
 
@@ -99,7 +100,7 @@ async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResu
             // Check lastVacuumedAt to see if we need to process this memory
             let should_vacuum = match item.get("lastVacuumedAt") {
                 Some(AttributeValue::S(last_vacuumed_str)) => {
-                    match DateTime::parse_from_rfc3339(last_vacuumed_str) {
+                    match DateTime::parse_from_rfc3339(&last_vacuumed_str) {
                         Ok(last_vacuumed) => {
                             let last_vacuumed_utc = last_vacuumed.with_timezone(&Utc);
                             last_vacuumed_utc < seven_days_ago
@@ -201,7 +202,7 @@ async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResu
 }
 
 async fn process_memory(
-    memvid_client: &MemvidClient,
+    _memvid_client: &MemvidClient,
     s3_client: &S3Client,
     memory_id: &str,
     bucket_name: &str,

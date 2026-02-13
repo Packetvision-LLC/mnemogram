@@ -6,7 +6,6 @@ use chrono::Utc;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shared::memvid::MemvidClient;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
