@@ -4,7 +4,10 @@ use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use tracing::{info, error};
 use tracing_subscriber::EnvFilter;
+
+mod extract_user_id;
 
 #[derive(Deserialize)]
 struct BatchRecallRequest {
@@ -46,22 +49,21 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
 
-    // Extract user ID from authorizer context or headers
-    let user_id = event
-        .headers()
-        .get("x-user-id")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| {
-            // Try to get from request context if available
-            if let Some(_context) = event.request_context().authorizer() {
-                // Note: We'll need to implement proper authorizer context parsing
-                // For now, just use a placeholder
-                None
-            } else {
-                None
-            }
-        })
-        .unwrap_or("anonymous");
+    // Get user ID from request context (set by authorizer)
+    let user_id = match extract_user_id::extract_user_id_from_context(&event) {
+        Ok(id) => id,
+        Err(err) => {
+            error!("Failed to extract user ID: {}", err);
+            return Ok(Response::builder()
+                .status(401)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&json!({
+                    "error": "unauthorized",
+                    "message": "Valid authorization required"
+                }))?))
+                .map_err(Box::new)?);
+        }
+    };
 
     // Parse request body
     let request_body: BatchRecallRequest = match event.body() {
