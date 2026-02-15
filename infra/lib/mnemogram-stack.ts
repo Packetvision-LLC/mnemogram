@@ -31,13 +31,22 @@ export class MnemogramStack extends cdk.Stack {
 
     // ── Storage ──────────────────────────────────────────────────────
 
-    // S3 bucket for .mv2 memory files
+    // S3 bucket for .mv2 memory files - per region, no cross-region replication
+    // User data stays in selected region for cost optimization and latency
     const memoryBucket = new s3.Bucket(this, "MemoryBucket", {
       bucketName: `mnemogram-${stage}-memories-${this.account}-${this.region}`,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       versioned: true,
+      // Intelligent tiering for automatic cost optimization
+      intelligentTieringConfigurations: [
+        {
+          id: "IntelligentTiering",
+          status: s3.IntelligentTieringStatus.ENABLED,
+          optionalFields: [s3.IntelligentTieringOptionalFields.BUCKET_KEY_STATUS],
+        },
+      ],
       lifecycleRules: [
         {
           id: "TransitionToIA",
@@ -45,7 +54,7 @@ export class MnemogramStack extends cdk.Stack {
           transitions: [
             {
               storageClass: s3.StorageClass.INFREQUENT_ACCESS,
-              transitionAfter: cdk.Duration.days(90),
+              transitionAfter: cdk.Duration.days(30), // Reduced from 90 days for cost optimization
             },
           ],
         },
@@ -55,7 +64,17 @@ export class MnemogramStack extends cdk.Stack {
           transitions: [
             {
               storageClass: s3.StorageClass.GLACIER,
-              transitionAfter: cdk.Duration.days(365),
+              transitionAfter: cdk.Duration.days(180), // Reduced from 365 days
+            },
+          ],
+        },
+        {
+          id: "TransitionToDeepArchive",
+          enabled: true,
+          transitions: [
+            {
+              storageClass: s3.StorageClass.DEEP_ARCHIVE,
+              transitionAfter: cdk.Duration.days(365), // Long-term archival for compliance
             },
           ],
         },
@@ -63,6 +82,21 @@ export class MnemogramStack extends cdk.Stack {
           id: "AbortIncompleteMultipartUploads",
           enabled: true,
           abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+        {
+          id: "CleanupOldVersions",
+          enabled: true,
+          noncurrentVersionTransitions: [
+            {
+              storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+              transitionAfter: cdk.Duration.days(7),
+            },
+            {
+              storageClass: s3.StorageClass.GLACIER,
+              transitionAfter: cdk.Duration.days(30),
+            },
+          ],
+          noncurrentVersionExpiration: cdk.Duration.days(90), // Clean up old versions
         },
       ],
     });
