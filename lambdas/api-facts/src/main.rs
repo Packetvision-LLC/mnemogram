@@ -9,6 +9,8 @@ use std::io::Write;
 use tracing::{info, warn, error};
 use tracing_subscriber::EnvFilter;
 
+mod extract_user_id;
+
 /// GET /v1/memories/{id}/facts — Returns structured facts extracted by enrichment
 /// Uses: memvid facts --json
 /// Pro/Enterprise only
@@ -33,8 +35,21 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         }
     };
 
-    // Get user ID from request context (set by authorizer) - TODO: Fix this properly
-    let user_id = "test-user".to_string(); // Temporary fix
+    // Get user ID from request context (set by authorizer)
+    let user_id = match extract_user_id::extract_user_id_from_context(&event) {
+        Ok(id) => id,
+        Err(err) => {
+            error!("Failed to extract user ID: {}", err);
+            return Ok(Response::builder()
+                .status(401)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&json!({
+                    "error": "unauthorized",
+                    "message": "Valid authorization required"
+                }))?))
+                .map_err(Box::new)?);
+        }
+    };
     
     /*
     let user_id = match event.request_context().authorizer().get("userId") {
