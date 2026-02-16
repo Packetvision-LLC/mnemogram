@@ -3,6 +3,7 @@ pub mod middleware;
 pub mod logging;
 pub mod validation;
 pub mod memvid;
+pub mod usage_tracking;
 
 // Future modules:
 // pub mod auth;    // JWT validation

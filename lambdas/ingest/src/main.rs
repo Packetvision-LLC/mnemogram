@@ -6,6 +6,7 @@ use chrono::Utc;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::usage_tracking::{track_api_usage, UsageEventType};
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -46,6 +47,9 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
     let sqs_client = SqsClient::new(&config);
 
+    // Generate request ID for tracking
+    let request_id = Uuid::new_v4().to_string();
+
     // Extract user ID from authorizer context or headers
     let user_id = event
         .headers()
@@ -62,6 +66,18 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             }
         })
         .unwrap_or("anonymous");
+
+    // Track usage event (fire and forget - don't fail request if tracking fails)
+    let metadata = HashMap::new();
+    if let Err(e) = track_api_usage(
+        user_id.to_string(),
+        UsageEventType::IngestMemory,
+        request_id.clone(),
+        Some(metadata),
+    ).await {
+        // Log error but don't fail the request
+        tracing::warn!("Failed to track usage: {}", e);
+    }
 
     // Parse request body
     let request_body: IngestRequest = match event.body() {

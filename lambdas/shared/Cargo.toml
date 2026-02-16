@@ -14,13 +14,13 @@ aws-config.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["json"] }
+tracing-subscriber.workspace = true
 thiserror.workspace = true
 jsonwebtoken.workspace = true
 uuid.workspace = true
-lambda_runtime = "0.8"
-lambda_http = { version = "0.8", optional = true }
-chrono = { version = "0.4", features = ["serde"] }
+lambda_runtime.workspace = true
+lambda_http = { workspace = true, optional = true }
+chrono.workspace = true
 tokio = { version = "1.0", features = ["process", "io-util"] }
-tempfile = "3.0"
-bytes = "1.0"
+tempfile.workspace = true
+bytes.workspace = true
