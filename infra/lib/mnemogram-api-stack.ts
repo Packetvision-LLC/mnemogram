@@ -19,10 +19,18 @@ export class MnemogramApiStack extends cdk.Stack {
     const stage = props.stage;
     const domainName = `api.mnemogram.ai`;
 
+    // ── Lambda Functions Environment ──────────────────────────────────
+
+    const commonEnv = {
+      STAGE: stage,
+      RUST_LOG: "info",
+      // Add DynamoDB table names and other env vars as needed
+    };
+
     // ── Lambda Authorizer ──────────────────────────────────────────
 
     const authorizerFn = new lambda.Function(this, "AuthorizerFn", {
-      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
       handler: "bootstrap",
       code: lambda.Code.fromAsset("../target/lambda/authorizer"),
       environment: {
@@ -40,17 +48,9 @@ export class MnemogramApiStack extends cdk.Stack {
     //   resources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/mnemogram-${stage}-users*`],
     // }));
 
-    // ── Lambda Functions (API-only) ──────────────────────────────────
-
-    const commonEnv = {
-      STAGE: stage,
-      RUST_LOG: "info",
-      // Add DynamoDB table names and other env vars as needed
-    };
-
     // Health/Status endpoint
     const statusFn = new lambda.Function(this, "StatusFn", {
-      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
       handler: "bootstrap",
       code: lambda.Code.fromAsset("../target/lambda/api-status"),
       environment: commonEnv,
@@ -59,7 +59,7 @@ export class MnemogramApiStack extends cdk.Stack {
 
     // Ingest endpoint
     const ingestFn = new lambda.Function(this, "IngestFn", {
-      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
       handler: "bootstrap", 
       code: lambda.Code.fromAsset("../target/lambda/api-ingest"),
       environment: commonEnv,
@@ -68,7 +68,7 @@ export class MnemogramApiStack extends cdk.Stack {
 
     // Search endpoint
     const searchFn = new lambda.Function(this, "SearchFn", {
-      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
       handler: "bootstrap",
       code: lambda.Code.fromAsset("../target/lambda/api-search"),
       environment: commonEnv,
@@ -77,7 +77,7 @@ export class MnemogramApiStack extends cdk.Stack {
 
     // Cards endpoint
     const cardsFn = new lambda.Function(this, "CardsFn", {
-      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
       handler: "bootstrap",
       code: lambda.Code.fromAsset("../target/lambda/api-cards"),
       environment: commonEnv,
@@ -86,7 +86,7 @@ export class MnemogramApiStack extends cdk.Stack {
 
     // Facts endpoint
     const factsFn = new lambda.Function(this, "FactsFn", {
-      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
       handler: "bootstrap",
       code: lambda.Code.fromAsset("../target/lambda/api-facts"),
       environment: commonEnv,
@@ -95,7 +95,7 @@ export class MnemogramApiStack extends cdk.Stack {
 
     // State management endpoint
     const stateFn = new lambda.Function(this, "StateFn", {
-      runtime: lambda.Runtime.PROVIDED_AL2_X86_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
       handler: "bootstrap",
       code: lambda.Code.fromAsset("../target/lambda/api-state"),
       environment: commonEnv,
@@ -205,10 +205,8 @@ export class MnemogramApiStack extends cdk.Stack {
     const certificate = certificatemanager.Certificate.fromCertificateArn(
       this, 
       "WildcardCertificate",
-      // Look up existing wildcard certificate by domain name
-      certificatemanager.Certificate.fromLookup(this, "ExistingWildcardCert", {
-        domainName: "*.mnemogram.ai",
-      }).certificateArn
+      // TODO: Replace with actual certificate ARN or use Certificate.fromLookup properly
+      `arn:aws:acm:us-east-1:${this.account}:certificate/your-certificate-id`
     );
 
     // ── CloudFront Distribution ─────────────────────────────────────
