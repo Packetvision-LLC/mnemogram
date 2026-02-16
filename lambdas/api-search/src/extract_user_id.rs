@@ -1,40 +1,39 @@
-use lambda_http::{Request, RequestExt, RequestContext};
+use lambda_http::{Request, RequestExt};
 use serde_json::Value;
 
 pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
-    // Get the request context
+    // Try to get user ID from headers first (common pattern)
+    if let Some(user_id) = event.headers().get("x-user-id") {
+        if let Ok(user_id_str) = user_id.to_str() {
+            return Ok(user_id_str.to_string());
+        }
+    }
+    
+    // Try to extract from request context as JSON
     let context = event.request_context();
     
-    // Extract authorizer context from request context using the new API
-    match context {
-        RequestContext::ApiGatewayV1(proxy_context) => {
-            // Try to get userId from the authorizer fields
-            if let Some(user_id_value) = proxy_context.authorizer.fields.get("userId") {
-                if let Some(user_id_str) = user_id_value.as_str() {
-                    return Ok(user_id_str.to_string());
+    // Serialize the context to JSON to work around type issues
+    if let Ok(context_json) = serde_json::to_value(&context) {
+        // Try different paths where user ID might be stored
+        let possible_paths = [
+            ["authorizer", "userId"],
+            ["authorizer", "fields", "userId"], 
+            ["authorizer", "principalId"],
+        ];
+        
+        for path in &possible_paths {
+            let mut current = &context_json;
+            for segment in path {
+                if let Some(value) = current.get(segment) {
+                    current = value;
+                } else {
+                    break;
                 }
             }
-        }
-        RequestContext::ApiGatewayV2(v2_context) => {
-            // For API Gateway V2, check if there's an authorizer context
-            if let Some(authorizer) = &v2_context.authorizer {
-                if let Some(user_id_value) = authorizer.get("userId") {
-                    if let Some(user_id_str) = user_id_value.as_str() {
-                        return Ok(user_id_str.to_string());
-                    }
-                }
+            
+            if let Some(user_id_str) = current.as_str() {
+                return Ok(user_id_str.to_string());
             }
-        }
-        RequestContext::WebSocket(ws_context) => {
-            // Try to get userId from the authorizer fields
-            if let Some(user_id_value) = ws_context.authorizer.get("userId") {
-                if let Some(user_id_str) = user_id_value.as_str() {
-                    return Ok(user_id_str.to_string());
-                }
-            }
-        }
-        RequestContext::Alb(_) => {
-            // ALB doesn't typically have authorizer context
         }
     }
     
