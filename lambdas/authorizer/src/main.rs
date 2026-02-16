@@ -65,32 +65,32 @@ struct UserRecord {
 
 async fn handler(event: LambdaEvent<AuthorizerEvent>) -> Result<AuthorizerResponse, Error> {
     let (event, _context) = event.into_parts();
-    
+
     // Extract API key from Authorization header or query parameter
     let api_key = extract_api_key(&event)?;
-    
+
     // Initialize DynamoDB client
     let config = aws_config::load_from_env().await;
     let dynamodb_client = DynamoClient::new(&config);
-    
+
     // Validate API key and get user subscription info
     let user = validate_api_key_and_subscription(&dynamodb_client, &api_key).await?;
-    
+
     // Check subscription status
     if user.subscription_status != "active" {
         return Err("Subscription not active".into());
     }
-    
+
     // Generate policy based on subscription tier
     let policy = generate_policy(&event.method_arn, &user.subscription_tier);
-    
+
     // Create context with user info and rate limits
     let mut context = HashMap::new();
     context.insert("userId".to_string(), user.user_id.clone());
     context.insert("email".to_string(), user.email.clone());
     context.insert("subscriptionTier".to_string(), user.subscription_tier.clone());
     context.insert("rateLimitTier".to_string(), user.rate_limit_tier.clone());
-    
+
     Ok(AuthorizerResponse {
         principal_id: user.user_id,
         policy_document: policy,
@@ -106,7 +106,7 @@ fn extract_api_key(event: &AuthorizerEvent) -> Result<String, Error> {
         }
         return Ok(token.clone());
     }
-    
+
     // Try x-api-key header
     if let Some(headers) = &event.headers {
         if let Some(api_key) = headers.get("x-api-key") {
@@ -116,7 +116,7 @@ fn extract_api_key(event: &AuthorizerEvent) -> Result<String, Error> {
             return Ok(api_key.clone());
         }
     }
-    
+
     Err("No API key found in request".into())
 }
 
@@ -125,7 +125,7 @@ async fn validate_api_key_and_subscription(
     api_key: &str,
 ) -> Result<UserRecord, Error> {
     let table_name = std::env::var("USERS_TABLE").unwrap_or_else(|_| "mnemogram-dev-users".to_string());
-    
+
     // Query DynamoDB for user by API key (GSI lookup)
     let result = client
         .query()
@@ -136,14 +136,14 @@ async fn validate_api_key_and_subscription(
         .send()
         .await
         .map_err(|e| format!("DynamoDB query failed: {}", e))?;
-    
+
     let items = result.items.as_deref().unwrap_or(&[]);
     if items.is_empty() {
         return Err("Invalid API key".into());
     }
-    
+
     let item = &items[0];
-    
+
     // Extract user data from DynamoDB item
     let user_id = item.get("user_id")
         .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
@@ -155,18 +155,18 @@ async fn validate_api_key_and_subscription(
     
     let subscription_tier = item.get("subscription_tier")
         .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
-        .unwrap_or("free");
+        .map_or("free", |s| s.as_str());
     
     let subscription_status = item.get("subscription_status")
         .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
-        .unwrap_or("inactive");
-    
+        .map_or("inactive", |s| s.as_str());
+
     let rate_limit_tier = match subscription_tier {
         "enterprise" => "enterprise", // 1000 req/sec
         "pro" => "pro",               // 100 req/sec  
         _ => "free",                  // 10 req/sec
     };
-    
+
     Ok(UserRecord {
         user_id: user_id.to_string(),
         email: email.to_string(),
@@ -179,7 +179,7 @@ async fn validate_api_key_and_subscription(
 
 fn generate_policy(method_arn: &str, subscription_tier: &str) -> PolicyDocument {
     let effect = "Allow";
-    
+
     // Parse ARN to create resource pattern
     let resource = if method_arn.contains("/v1/") {
         // Allow all v1 endpoints for active subscribers
@@ -187,14 +187,14 @@ fn generate_policy(method_arn: &str, subscription_tier: &str) -> PolicyDocument 
     } else {
         method_arn.to_string()
     };
-    
+
     // Enterprise tier gets additional access
     let mut statements = vec![PolicyStatement {
         action: "execute-api:Invoke".to_string(),
         effect: effect.to_string(),
         resource: resource.clone(),
     }];
-    
+
     if subscription_tier == "enterprise" {
         // Enterprise gets access to admin endpoints
         statements.push(PolicyStatement {
@@ -203,7 +203,7 @@ fn generate_policy(method_arn: &str, subscription_tier: &str) -> PolicyDocument 
             resource: method_arn.replace("/v1/", "/admin/"),
         });
     }
-    
+
     PolicyDocument {
         version: "2012-10-17".to_string(),
         statement: statements,
@@ -216,6 +216,6 @@ async fn main() -> Result<(), Error> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .json()
         .init();
-    
+
     lambda_runtime::run(service_fn(handler)).await
 }
