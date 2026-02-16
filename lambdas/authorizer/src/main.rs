@@ -1,8 +1,7 @@
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use aws_sdk_dynamodb::Client as DynamoClient;
-use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -138,7 +137,7 @@ async fn validate_api_key_and_subscription(
         .await
         .map_err(|e| format!("DynamoDB query failed: {}", e))?;
     
-    let items = result.items().unwrap_or(&[]);
+    let items = result.items.as_deref().unwrap_or(&[]);
     if items.is_empty() {
         return Err("Invalid API key".into());
     }
@@ -147,19 +146,19 @@ async fn validate_api_key_and_subscription(
     
     // Extract user data from DynamoDB item
     let user_id = item.get("user_id")
-        .and_then(|v| v.as_s().ok())
+        .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .ok_or("Missing user_id")?;
     
     let email = item.get("email")
-        .and_then(|v| v.as_s().ok())
+        .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .ok_or("Missing email")?;
     
     let subscription_tier = item.get("subscription_tier")
-        .and_then(|v| v.as_s().ok())
+        .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .unwrap_or("free");
     
     let subscription_status = item.get("subscription_status")
-        .and_then(|v| v.as_s().ok())
+        .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .unwrap_or("inactive");
     
     let rate_limit_tier = match subscription_tier {
