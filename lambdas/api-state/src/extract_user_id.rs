@@ -1,23 +1,36 @@
 use lambda_http::{Request, RequestExt};
+use lambda_http::request::RequestContext;
 use serde_json::Value;
 
 pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
     // Get the request context
     let context = event.request_context();
     
-    // Extract authorizer context from request context
-    if let Some(authorizer) = context.get("authorizer") {
-        if let Some(user_id) = authorizer.get("userId") {
-            if let Some(user_id_str) = user_id.as_str() {
-                return Ok(user_id_str.to_string());
+    // Try to extract user_id from different authorizer patterns
+    match context {
+        RequestContext::ApiGatewayV1(ctx) => {
+            if let Some(authorizer) = &ctx.authorizer {
+                if let Some(user_id) = authorizer.get("userId") {
+                    if let Some(user_id_str) = user_id.as_str() {
+                        return Ok(user_id_str.to_string());
+                    }
+                }
             }
         }
-    }
-    
-    // Fallback: try to get from custom authorizer context
-    if let Some(Value::Object(context_map)) = context.get("authorizer") {
-        if let Some(Value::String(user_id)) = context_map.get("userId") {
-            return Ok(user_id.clone());
+        RequestContext::ApiGatewayV2(ctx) => {
+            if let Some(authorizer) = &ctx.authorizer {
+                if let Some(lambda_context) = &authorizer.lambda {
+                    if let Some(user_id) = lambda_context.get("userId") {
+                        if let Some(user_id_str) = user_id.as_str() {
+                            return Ok(user_id_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        RequestContext::Alb(_) => {
+            // ALB doesn't typically have authorizer context
+            return Err("ALB context doesn't support authorizer data".to_string());
         }
     }
     
