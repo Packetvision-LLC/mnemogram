@@ -39,6 +39,6 @@
     "@memvid/cli-win32-x64": "2.0.153"
   },
   "engines": {
-    "node": ">=14"
+    "node": ">=24"
   }
 }
