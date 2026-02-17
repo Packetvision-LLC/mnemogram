@@ -203,7 +203,7 @@ async fn search_memory_with_memvid(
         .map_err(|e| format!("Failed to download .mv2 file from S3: {}", e))?;
 
     let mut body = get_object_result.body.into_async_read();
-    let mut temp_file_write = File::create(temp_path).await?;
+    let mut temp_file_write: File = File::create(temp_path).await?;
 
     // Stream the S3 object to the temporary file
     tokio::io::copy(&mut body, &mut temp_file_write).await?;
