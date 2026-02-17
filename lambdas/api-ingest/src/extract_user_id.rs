@@ -8,16 +8,16 @@ pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
         if let Some(Value::String(user_id)) = authorizer.fields.get("userId") {
             return Ok(user_id.clone());
         }
-        
+
         // Also try different key formats that might be used
         if let Some(Value::String(user_id)) = authorizer.fields.get("user_id") {
             return Ok(user_id.clone());
         }
-        
+
         if let Some(Value::String(user_id)) = authorizer.fields.get("sub") {
             return Ok(user_id.clone());
         }
-        
+
         if let Some(Value::String(user_id)) = authorizer.fields.get("principalId") {
             return Ok(user_id.clone());
         }
