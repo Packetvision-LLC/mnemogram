@@ -18,6 +18,28 @@ struct MaintenanceEvent {
     // CloudWatch Events schedule - can be empty
     #[serde(default)]
     source: String,
+    // SQS Records for threshold-triggered rebuilds
+    #[serde(rename = "Records")]
+    records: Option<Vec<SqsRecord>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SqsRecord {
+    body: Option<String>,
+    #[serde(rename = "eventSource")]
+    event_source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThresholdMessage {
+    #[serde(rename = "userId")]
+    user_id: String,
+    #[serde(rename = "triggerType")]
+    trigger_type: String,
+    threshold: String,
+    count: u32,
+    #[serde(rename = "triggeredAt")]
+    triggered_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,8 +66,8 @@ struct MemoryProcessResult {
     error_message: Option<String>,
 }
 
-async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResult, Error> {
-    info!("Starting maintenance vacuum/compaction process");
+async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResult, Error> {
+    info!("Starting maintenance process");
 
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamo_client = DynamoDbClient::new(&config);
@@ -61,17 +83,43 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
 
     let start_time = std::time::Instant::now();
 
-    // Scan memories table for all active memories
-    let mut scan_result = dynamo_client
-        .scan()
-        .table_name(&memories_table)
-        .filter_expression("#status = :status")
-        .expression_attribute_names("#status", "status")
-        .expression_attribute_values(":status", AttributeValue::S("active".to_string()))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to scan memories table: {}", e))?;
+    // Check if this is a threshold-triggered event or scheduled maintenance
+    let target_user_ids: Vec<String> = if let Some(records) = &event.payload.records {
+        // Process SQS messages for threshold-triggered rebuilds
+        let mut user_ids = Vec::new();
+        for record in records {
+            if let Some(body) = &record.body {
+                match serde_json::from_str::<ThresholdMessage>(body) {
+                    Ok(threshold_msg) => {
+                        info!(
+                            "Processing threshold-triggered rebuild for user {}: {} {} (count: {})",
+                            threshold_msg.user_id, threshold_msg.threshold, threshold_msg.trigger_type, threshold_msg.count
+                        );
+                        user_ids.push(threshold_msg.user_id);
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse threshold message: {} - body: {}", e, body);
+                    }
+                }
+            }
+        }
+        user_ids
+    } else {
+        // Scheduled maintenance - process all users
+        Vec::new()
+    };
 
+    let (scan_result, is_user_specific) = if !target_user_ids.is_empty() {
+        // User-specific processing
+        info!("Processing {} specific users for maintenance", target_user_ids.len());
+        (get_user_memories(&dynamo_client, &memories_table, &target_user_ids).await?, true)
+    } else {
+        // General scheduled maintenance
+        info!("Processing all active memories for scheduled maintenance");
+        (get_all_active_memories(&dynamo_client, &memories_table).await?, false)
+    };
+
+    // Process the memories
     let mut results = Vec::new();
     let mut processed_count = 0;
     let mut skipped_count = 0;
@@ -83,22 +131,23 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
     let now = Utc::now();
     let seven_days_ago = now - chrono::Duration::days(7);
 
-    loop {
-        let items = scan_result.items();
+    for item in scan_result {
+        let memory_id: String = item
+            .get("memoryId")
+            .and_then(|v: &AttributeValue| v.as_s().ok())
+            .cloned()
+            .unwrap_or_default();
 
-        for item in items {
-            let memory_id: String = item
-                .get("memoryId")
-                .and_then(|v: &AttributeValue| v.as_s().ok())
-                .cloned()
-                .unwrap_or_default();
+        if memory_id.is_empty() {
+            continue;
+        }
 
-            if memory_id.is_empty() {
-                continue;
-            }
-
+        // For user-specific rebuilds, always process. For scheduled, check timing.
+        let should_process = if is_user_specific {
+            true
+        } else {
             // Check lastVacuumedAt to see if we need to process this memory
-            let should_vacuum = match item.get("lastVacuumedAt") {
+            match item.get("lastVacuumedAt") {
                 Some(AttributeValue::S(last_vacuumed_str)) => {
                     match DateTime::parse_from_rfc3339(&last_vacuumed_str) {
                         Ok(last_vacuumed) => {
@@ -110,80 +159,65 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
                                 "Invalid lastVacuumedAt timestamp for memory {}: {}",
                                 memory_id, last_vacuumed_str
                             );
-                            true // Vacuum if timestamp is invalid
+                            true // Process if timestamp is invalid
                         }
                     }
                 }
-                _ => true, // Vacuum if no lastVacuumedAt field
-            };
-
-            if !should_vacuum {
-                info!("Skipping memory {} - vacuumed recently", memory_id);
-                skipped_count += 1;
-                continue;
+                _ => true, // Process if no lastVacuumedAt field
             }
+        };
 
-            info!("Processing memory {} for vacuum/compaction", memory_id);
-
-            match process_memory(&memvid_client, &s3_client, &memory_id, &bucket_name).await {
-                Ok(result) => {
-                    // Update lastVacuumedAt in DynamoDB
-                    if let Err(e) =
-                        update_last_vacuumed(&dynamo_client, &memories_table, &memory_id).await
-                    {
-                        warn!(
-                            "Failed to update lastVacuumed timestamp for {}: {}",
-                            memory_id, e
-                        );
-                    }
-
-                    total_frames_reclaimed += result.frames_reclaimed;
-                    total_space_saved_bytes += result.space_saved_bytes;
-                    processed_count += 1;
-                    results.push(result);
-                }
-                Err(e) => {
-                    error!("Failed to process memory {}: {}", memory_id, e);
-                    error_count += 1;
-                    results.push(MemoryProcessResult {
-                        memory_id,
-                        success: false,
-                        frames_before: 0,
-                        frames_after: 0,
-                        frames_reclaimed: 0,
-                        size_before_bytes: 0,
-                        size_after_bytes: 0,
-                        space_saved_bytes: 0,
-                        processing_time_ms: 0,
-                        error_message: Some(e.to_string()),
-                    });
-                }
-            }
+        if !should_process {
+            info!("Skipping memory {} - processed recently", memory_id);
+            skipped_count += 1;
+            continue;
         }
 
-        // Check if there are more items to scan
-        if let Some(last_key) = scan_result.last_evaluated_key() {
-            scan_result = dynamo_client
-                .scan()
-                .table_name(&memories_table)
-                .filter_expression("#status = :status")
-                .expression_attribute_names("#status", "status")
-                .expression_attribute_values(":status", AttributeValue::S("active".to_string()))
-                .set_exclusive_start_key(Some(last_key.clone()))
-                .send()
-                .await
-                .map_err(|e| format!("Failed to continue scan: {}", e))?;
-        } else {
-            break;
+        info!("Processing memory {} for vacuum/compaction", memory_id);
+
+        match process_memory(&memvid_client, &s3_client, &memory_id, &bucket_name).await {
+            Ok(result) => {
+                // Update lastVacuumedAt in DynamoDB
+                if let Err(e) =
+                    update_last_vacuumed(&dynamo_client, &memories_table, &memory_id).await
+                {
+                    warn!(
+                        "Failed to update lastVacuumed timestamp for {}: {}",
+                        memory_id, e
+                    );
+                }
+
+                total_frames_reclaimed += result.frames_reclaimed;
+                total_space_saved_bytes += result.space_saved_bytes;
+                processed_count += 1;
+                results.push(result);
+            }
+            Err(e) => {
+                error!("Failed to process memory {}: {}", memory_id, e);
+                error_count += 1;
+                results.push(MemoryProcessResult {
+                    memory_id,
+                    success: false,
+                    frames_before: 0,
+                    frames_after: 0,
+                    frames_reclaimed: 0,
+                    size_before_bytes: 0,
+                    size_after_bytes: 0,
+                    space_saved_bytes: 0,
+                    processing_time_ms: 0,
+                    error_message: Some(e.to_string()),
+                });
+            }
         }
     }
 
     let processing_duration = start_time.elapsed();
 
     // Log detailed results
-    info!("Maintenance completed: processed={}, skipped={}, errors={}, frames_reclaimed={}, space_saved_mb={:.2}, duration_ms={}",
+    info!("Maintenance completed: processed={}, skipped={}, errors={}, frames_reclaimed={}, space_saved_mb={:.2}, duration_ms={}, mode={}",
           processed_count, skipped_count, error_count, total_frames_reclaimed,
-          total_space_saved_bytes as f64 / (1024.0 * 1024.0), processing_duration.as_millis());
+          total_space_saved_bytes as f64 / (1024.0 * 1024.0), processing_duration.as_millis(),
+          if is_user_specific { "threshold-triggered" } else { "scheduled" });
 
     for result in &results {
         if result.success {
@@ -353,6 +387,93 @@ async fn update_last_vacuumed(
         .await?;
 
     Ok(())
+}
+
+/// Get memories for specific users
+async fn get_user_memories(
+    dynamo_client: &DynamoDbClient,
+    table_name: &str,
+    user_ids: &[String],
+) -> Result<Vec<HashMap<String, AttributeValue>>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut all_items = Vec::new();
+
+    for user_id in user_ids {
+        // Query using the userId GSI
+        let mut query_result = dynamo_client
+            .query()
+            .table_name(table_name)
+            .index_name("userId-index")
+            .key_condition_expression("userId = :userId AND #status = :status")
+            .expression_attribute_names("#status", "status")
+            .expression_attribute_values(":userId", AttributeValue::S(user_id.clone()))
+            .expression_attribute_values(":status", AttributeValue::S("active".to_string()))
+            .send()
+            .await?;
+
+        loop {
+            if let Some(items) = query_result.items() {
+                all_items.extend(items.iter().cloned());
+            }
+
+            // Check if there are more items to query
+            if let Some(last_key) = query_result.last_evaluated_key() {
+                query_result = dynamo_client
+                    .query()
+                    .table_name(table_name)
+                    .index_name("userId-index")
+                    .key_condition_expression("userId = :userId AND #status = :status")
+                    .expression_attribute_names("#status", "status")
+                    .expression_attribute_values(":userId", AttributeValue::S(user_id.clone()))
+                    .expression_attribute_values(":status", AttributeValue::S("active".to_string()))
+                    .set_exclusive_start_key(Some(last_key.clone()))
+                    .send()
+                    .await?;
+            } else {
+                break;
+            }
+        }
+    }
+
+    Ok(all_items)
+}
+
+/// Get all active memories for scheduled maintenance
+async fn get_all_active_memories(
+    dynamo_client: &DynamoDbClient,
+    table_name: &str,
+) -> Result<Vec<HashMap<String, AttributeValue>>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut all_items = Vec::new();
+    let mut scan_result = dynamo_client
+        .scan()
+        .table_name(table_name)
+        .filter_expression("#status = :status")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":status", AttributeValue::S("active".to_string()))
+        .send()
+        .await?;
+
+    loop {
+        if let Some(items) = scan_result.items() {
+            all_items.extend(items.iter().cloned());
+        }
+
+        // Check if there are more items to scan
+        if let Some(last_key) = scan_result.last_evaluated_key() {
+            scan_result = dynamo_client
+                .scan()
+                .table_name(table_name)
+                .filter_expression("#status = :status")
+                .expression_attribute_names("#status", "status")
+                .expression_attribute_values(":status", AttributeValue::S("active".to_string()))
+                .set_exclusive_start_key(Some(last_key.clone()))
+                .send()
+                .await?;
+        } else {
+            break;
+        }
+    }
+
+    Ok(all_items)
 }
 
 #[tokio::main]

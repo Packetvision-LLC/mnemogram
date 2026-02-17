@@ -172,6 +172,20 @@ export class MnemogramStack extends cdk.Stack {
       pointInTimeRecovery: true,
     });
 
+    // DynamoDB table for threshold tracking
+    const thresholdTable = new dynamodb.Table(this, "ThresholdTable", {
+      tableName: `mnemogram-${stage}-threshold-tracking`,
+      partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
+      billingMode,
+      readCapacity,
+      writeCapacity,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecovery: true,
+      // TTL for automatic cleanup of old tracking records
+      timeToLiveAttribute: "ttl",
+    });
+
     // ── SQS Queues ──────────────────────────────────────────────────
 
     // Queue for triggering sketch building after memory ingestion
@@ -289,9 +303,11 @@ export class MnemogramStack extends cdk.Stack {
         SUBSCRIPTIONS_TABLE: subscriptionsTable.tableName,
         API_KEYS_TABLE: apiKeysTable.tableName,
         USAGE_TABLE: usageTable.tableName,
+        THRESHOLD_TABLE: thresholdTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
         SKETCH_BUILDER_QUEUE_URL: sketchBuilderQueue.queueUrl,
         INDEX_REBUILD_QUEUE_URL: indexRebuildQueue.queueUrl,
+        MAINTENANCE_QUEUE_URL: indexRebuildQueue.queueUrl, // Reuse index rebuild queue for maintenance
         ENRICHMENT_QUEUE_URL: enrichmentQueue.queueUrl,
       },
     };
@@ -568,12 +584,16 @@ export class MnemogramStack extends cdk.Stack {
     usageTable.grantReadWriteData(recallFn);
     usageTable.grantReadWriteData(batchRecallFn);
     usageTable.grantReadWriteData(searchMemoryFn);
+    thresholdTable.grantReadWriteData(ingestFn);
+    thresholdTable.grantReadWriteData(manageFn);
+    thresholdTable.grantReadWriteData(maintenanceFn);
 
     // Grant SQS permissions
     sketchBuilderQueue.grantSendMessages(ingestFn); // Trigger sketch building after ingest
     sketchBuilderQueue.grantConsumeMessages(sketchBuilderFn);
     indexRebuildQueue.grantSendMessages(validateUploadFn); // Trigger index rebuild
     indexRebuildQueue.grantSendMessages(maintenanceFn);
+    indexRebuildQueue.grantSendMessages(ingestFn); // Trigger index rebuild based on thresholds
     enrichmentQueue.grantSendMessages(ingestFn); // Trigger enrichment after ingest
     enrichmentQueue.grantConsumeMessages(enrichmentFn);
 

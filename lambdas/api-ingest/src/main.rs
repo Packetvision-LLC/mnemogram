@@ -6,7 +6,7 @@ use chrono::Utc;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde_json::json;
 use std::collections::HashMap;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
@@ -206,6 +206,14 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .await
         .map_err(Box::new)?;
 
+    // Update ingest threshold tracking (only for completed uploads)
+    if file_size > 0 {
+        if let Err(e) = update_ingest_threshold_tracking(&dynamodb_client, &user_id, &timestamp).await {
+            warn!("Failed to update ingest threshold tracking: {}", e);
+            // Don't fail the ingest for threshold tracking errors
+        }
+    }
+
     // Trigger background processing only for direct uploads (pre-signed uploads will be triggered by S3 events)
     if upload_url.is_none() && file_size > 0 {
         info!("Triggering background processing for memory: {}", memory_id);
@@ -250,6 +258,12 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
                 ),
                 Err(e) => error!("Failed to send sketch builder message: {}", e),
             }
+        }
+
+        // Check if we should trigger index rebuild based on thresholds
+        if let Err(e) = check_and_trigger_index_rebuild(&dynamodb_client, &sqs_client, &user_id).await {
+            warn!("Failed to check index rebuild threshold: {}", e);
+            // Don't fail the ingest for threshold check errors
         }
     }
 
@@ -305,6 +319,145 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .map_err(Box::new)?;
 
     Ok(resp)
+}
+
+/// Update ingest threshold tracking for a user
+async fn update_ingest_threshold_tracking(
+    dynamodb_client: &aws_sdk_dynamodb::Client,
+    user_id: &str,
+    timestamp: &chrono::DateTime<chrono::Utc>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let threshold_table = std::env::var("THRESHOLD_TABLE")
+        .unwrap_or_else(|_| "mnemogram-dev-threshold-tracking".to_string());
+
+    let today = timestamp.format("%Y-%m-%d").to_string();
+    let this_hour = timestamp.format("%Y-%m-%d-%H").to_string();
+
+    // Update daily ingest count for user
+    let user_daily_key = HashMap::from([
+        ("pk".to_string(), AttributeValue::S(format!("user#{}", user_id))),
+        ("sk".to_string(), AttributeValue::S(format!("daily#{}", today))),
+    ]);
+
+    let _daily_result = dynamodb_client
+        .update_item()
+        .table_name(&threshold_table)
+        .set_key(Some(user_daily_key))
+        .update_expression("ADD ingestCount :inc SET lastUpdated = :timestamp")
+        .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
+        .expression_attribute_values(":timestamp", AttributeValue::S(timestamp.to_rfc3339()))
+        .send()
+        .await?;
+
+    // Update hourly ingest count for user (for more fine-grained thresholds)
+    let user_hourly_key = HashMap::from([
+        ("pk".to_string(), AttributeValue::S(format!("user#{}", user_id))),
+        ("sk".to_string(), AttributeValue::S(format!("hourly#{}", this_hour))),
+    ]);
+
+    let _hourly_result = dynamodb_client
+        .update_item()
+        .table_name(&threshold_table)
+        .set_key(Some(user_hourly_key))
+        .update_expression("ADD ingestCount :inc SET lastUpdated = :timestamp, #ttl = :ttl")
+        .expression_attribute_names("#ttl", "ttl")
+        .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
+        .expression_attribute_values(":timestamp", AttributeValue::S(timestamp.to_rfc3339()))
+        .expression_attribute_values(":ttl", AttributeValue::N((timestamp.timestamp() + 86400 * 7).to_string())) // 7 day TTL
+        .send()
+        .await?;
+
+    // Update global daily counters
+    let global_daily_key = HashMap::from([
+        ("pk".to_string(), AttributeValue::S("global".to_string())),
+        ("sk".to_string(), AttributeValue::S(format!("daily#{}", today))),
+    ]);
+
+    let _global_result = dynamodb_client
+        .update_item()
+        .table_name(&threshold_table)
+        .set_key(Some(global_daily_key))
+        .update_expression("ADD ingestCount :inc, uniqueUsers :user SET lastUpdated = :timestamp")
+        .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
+        .expression_attribute_values(":user", AttributeValue::SS(vec![user_id.to_string()]))
+        .expression_attribute_values(":timestamp", AttributeValue::S(timestamp.to_rfc3339()))
+        .send()
+        .await?;
+
+    Ok(())
+}
+
+/// Check if we should trigger index rebuild based on thresholds and trigger if needed
+async fn check_and_trigger_index_rebuild(
+    dynamodb_client: &aws_sdk_dynamodb::Client,
+    sqs_client: &aws_sdk_sqs::Client,
+    user_id: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let threshold_table = std::env::var("THRESHOLD_TABLE")
+        .unwrap_or_else(|_| "mnemogram-dev-threshold-tracking".to_string());
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    
+    // Check user's daily ingest count
+    let user_daily_key = HashMap::from([
+        ("pk".to_string(), AttributeValue::S(format!("user#{}", user_id))),
+        ("sk".to_string(), AttributeValue::S(format!("daily#{}", today))),
+    ]);
+
+    let user_result = dynamodb_client
+        .get_item()
+        .table_name(&threshold_table)
+        .set_key(Some(user_daily_key))
+        .send()
+        .await?;
+
+    if let Some(item) = user_result.item() {
+        let daily_count = item
+            .get("ingestCount")
+            .and_then(|v| v.as_n().ok())
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        // Define threshold values (configurable via environment)
+        let user_daily_threshold = std::env::var("USER_DAILY_REBUILD_THRESHOLD")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse::<u32>()
+            .unwrap_or(10);
+
+        // Check if user has hit the threshold and needs index rebuild
+        if daily_count >= user_daily_threshold && daily_count % user_daily_threshold == 0 {
+            info!(
+                "User {} hit daily ingest threshold ({} ingests), triggering index rebuild",
+                user_id, daily_count
+            );
+
+            // Send message to maintenance queue for user-specific rebuild
+            if let Ok(maintenance_queue_url) = std::env::var("MAINTENANCE_QUEUE_URL") {
+                let rebuild_message = json!({
+                    "userId": user_id,
+                    "triggerType": "threshold",
+                    "threshold": "daily_ingest",
+                    "count": daily_count,
+                    "triggeredAt": chrono::Utc::now().to_rfc3339()
+                });
+
+                let message_body = serde_json::to_string(&rebuild_message)?;
+
+                match sqs_client
+                    .send_message()
+                    .queue_url(&maintenance_queue_url)
+                    .message_body(message_body)
+                    .send()
+                    .await
+                {
+                    Ok(_) => info!("Triggered index rebuild for user: {}", user_id),
+                    Err(e) => error!("Failed to send index rebuild message: {}", e),
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
