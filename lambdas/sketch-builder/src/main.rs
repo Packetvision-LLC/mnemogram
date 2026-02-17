@@ -221,7 +221,7 @@ async fn build_sketch_tracks(
         .send()
         .await?;
 
-    let original_size = obj.content_length().unwrap_or(0) as i64;
+    let original_size = obj.content_length().unwrap_or(0);
     let data = obj.body.collect().await?.into_bytes();
 
     // Save to temporary file

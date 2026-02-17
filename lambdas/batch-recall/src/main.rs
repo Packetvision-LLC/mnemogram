@@ -1,10 +1,10 @@
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use tracing::{error, info};
+use tracing::error;
 use tracing_subscriber::EnvFilter;
 
 mod extract_user_id;

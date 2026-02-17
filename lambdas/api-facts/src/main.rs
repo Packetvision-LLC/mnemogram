@@ -197,7 +197,7 @@ async fn check_subscription_tier(
 
     if let Some(item) = result.item() {
         if let Some(tier_attr) = item.get("tier") {
-            if let Some(tier) = tier_attr.as_s().ok() {
+            if let Ok(tier) = tier_attr.as_s() {
                 return Ok(tier.clone());
             }
         }
@@ -225,7 +225,7 @@ async fn verify_memory_ownership(
 
     if let Some(item) = result.item() {
         if let Some(owner_attr) = item.get("userId") {
-            if let Some(owner_id) = owner_attr.as_s().ok() {
+            if let Ok(owner_id) = owner_attr.as_s() {
                 return Ok(owner_id == user_id);
             }
         }
@@ -248,7 +248,7 @@ async fn check_enrichment_status(
 
     if let Some(item) = result.item() {
         if let Some(status_attr) = item.get("enrichmentStatus") {
-            if let Some(status) = status_attr.as_s().ok() {
+            if let Ok(status) = status_attr.as_s() {
                 return Ok(status.clone());
             }
         }

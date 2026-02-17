@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct StripeEvent {
     id: String,
     #[serde(rename = "type")]
@@ -38,6 +39,7 @@ struct CheckoutTotalDetails {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Subscription {
     id: String,
     customer: String,
@@ -60,18 +62,21 @@ struct SubscriptionItem {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Price {
     id: String,
     metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Discount {
     coupon: Option<Coupon>,
     promotion_code: Option<PromotionCode>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Coupon {
     id: String,
 }
@@ -82,6 +87,7 @@ struct PromotionCode {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Invoice {
     id: String,
     customer: String,
@@ -171,8 +177,7 @@ async fn handle_checkout_completed(
         session
             .metadata
             .as_ref()
-            .and_then(|m| m.get("promoCode"))
-            .map(|s| s.clone())
+            .and_then(|m| m.get("promoCode")).cloned()
     } else {
         None
     };
@@ -276,7 +281,7 @@ async fn handle_subscription_updated(
         });
 
     let current_period_end = DateTime::from_timestamp(subscription.current_period_end, 0)
-        .unwrap_or_else(|| Utc::now())
+        .unwrap_or_else(Utc::now)
         .to_rfc3339();
 
     let now = Utc::now().to_rfc3339();

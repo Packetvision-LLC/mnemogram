@@ -73,6 +73,9 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
 
     let _memvid_client = MemvidClient::new(s3_client.clone(), "".to_string()); // bucket will be set per record
 
+    // Pre-compile regex outside the loop
+    let memory_regex = regex::Regex::new(r"memories/([^/]+)\.mv2$").unwrap();
+
     for record in event.payload.records {
         if !record.event_name.starts_with("ObjectCreated") {
             continue;
@@ -90,10 +93,7 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
         );
 
         // Extract memory ID from S3 key (format: memories/{memory_id}.mv2)
-        let memory_id = if let Some(captures) = regex::Regex::new(r"memories/([^/]+)\.mv2$")
-            .unwrap()
-            .captures(&key)
-        {
+        let memory_id = if let Some(captures) = memory_regex.captures(&key) {
             captures.get(1).unwrap().as_str().to_string()
         } else {
             tracing::warn!(
@@ -218,31 +218,32 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
                 // Check if we should trigger an index rebuild (MNEM-158)
                 if validation_result == "valid"
                     && new_frame_count > previous_frame_count + 100
-                    && index_rebuild_queue_url.is_some()
                 {
-                    let frame_increase = new_frame_count - previous_frame_count;
-                    tracing::info!(
-                        "Memory {} frame count increased by {} ({}→{}), triggering index rebuild",
-                        memory_id,
-                        frame_increase,
-                        previous_frame_count,
-                        new_frame_count
-                    );
+                    if let Some(queue_url) = &index_rebuild_queue_url {
+                        let frame_increase = new_frame_count - previous_frame_count;
+                        tracing::info!(
+                            "Memory {} frame count increased by {} ({}→{}), triggering index rebuild",
+                            memory_id,
+                            frame_increase,
+                            previous_frame_count,
+                            new_frame_count
+                        );
 
-                    if let Err(e) = trigger_index_rebuild(
-                        &sqs_client,
-                        index_rebuild_queue_url.as_ref().unwrap(),
-                        &memory_id,
-                        new_frame_count,
-                    )
-                    .await
-                    {
+                        if let Err(e) = trigger_index_rebuild(
+                            &sqs_client,
+                            queue_url,
+                            &memory_id,
+                            new_frame_count,
+                        )
+                        .await
+                        {
                         tracing::error!(
                             "Failed to trigger index rebuild for memory {}: {}",
                             memory_id,
                             e
                         );
                     }
+                }
                 }
             }
             Err(e) => {
