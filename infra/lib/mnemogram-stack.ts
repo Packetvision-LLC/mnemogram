@@ -1270,6 +1270,138 @@ export class MnemogramStack extends cdk.Stack {
       })
     );
 
+    // ── S3 Vectors Monitoring (MNEM-235) ────────────────────────────
+
+    // S3 bucket monitoring for memory files storage and retrieval
+    const s3BucketSizeBytes = new cloudwatch.Metric({
+      namespace: "AWS/S3",
+      metricName: "BucketSizeBytes",
+      dimensionsMap: {
+        BucketName: memoryBucket.bucketName,
+        StorageType: "StandardStorage",
+      },
+      statistic: "Average",
+      period: cdk.Duration.days(1), // Daily measurement
+    });
+
+    const s3NumberOfObjects = new cloudwatch.Metric({
+      namespace: "AWS/S3",
+      metricName: "NumberOfObjects",
+      dimensionsMap: {
+        BucketName: memoryBucket.bucketName,
+        StorageType: "AllStorageTypes",
+      },
+      statistic: "Average",
+      period: cdk.Duration.days(1), // Daily measurement
+    });
+
+    // S3 request metrics for vectors operations
+    const s3GetRequests = new cloudwatch.Metric({
+      namespace: "AWS/S3",
+      metricName: "NumberOfObjects",
+      dimensionsMap: {
+        BucketName: memoryBucket.bucketName,
+        FilterId: "EntireBucket",
+      },
+      statistic: "Sum",
+      period: cdk.Duration.minutes(5),
+    });
+
+    // S3 monitoring alarms
+    new cloudwatch.Alarm(this, "S3BucketSizeAlarm", {
+      alarmName: `mnemogram-${stage}-s3-bucket-size`,
+      alarmDescription: `S3 bucket size monitoring for memory files (${stage})`,
+      metric: s3BucketSizeBytes,
+      threshold: stage === "prod" ? 100 * 1024 * 1024 * 1024 : 10 * 1024 * 1024 * 1024, // 100GB prod, 10GB dev
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
+
+    // Cost monitoring alarm - S3 storage costs
+    const s3CostMetric = new cloudwatch.Metric({
+      namespace: "AWS/Billing",
+      metricName: "EstimatedCharges",
+      dimensionsMap: {
+        ServiceName: "AmazonS3",
+        Currency: "USD",
+      },
+      statistic: "Maximum",
+      period: cdk.Duration.hours(6), // Check every 6 hours
+    });
+
+    new cloudwatch.Alarm(this, "S3CostAlarm", {
+      alarmName: `mnemogram-${stage}-s3-cost`,
+      alarmDescription: `S3 cost monitoring for memory storage (${stage})`,
+      metric: s3CostMetric,
+      threshold: stage === "prod" ? 500 : 50, // $500 prod, $50 dev per month
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
+
+    // Lambda costs monitoring
+    const lambdaCostMetric = new cloudwatch.Metric({
+      namespace: "AWS/Billing",
+      metricName: "EstimatedCharges",
+      dimensionsMap: {
+        ServiceName: "AWSLambda",
+        Currency: "USD",
+      },
+      statistic: "Maximum",
+      period: cdk.Duration.hours(6),
+    });
+
+    new cloudwatch.Alarm(this, "LambdaCostAlarm", {
+      alarmName: `mnemogram-${stage}-lambda-cost`,
+      alarmDescription: `Lambda cost monitoring for vector processing (${stage})`,
+      metric: lambdaCostMetric,
+      threshold: stage === "prod" ? 200 : 20, // $200 prod, $20 dev per month
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
+
+    // Add S3 vectors operations monitoring to dashboard
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: "S3 Vectors Storage Metrics",
+        left: [s3BucketSizeBytes, s3NumberOfObjects],
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: "Cost Monitoring (S3 + Lambda)",
+        left: [s3CostMetric, lambdaCostMetric],
+        width: 12,
+        height: 6,
+      })
+    );
+
+    // Add performance monitoring for vector search operations
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: "Vector Search Performance",
+        left: [
+          searchFn.metricDuration({ statistic: "Average" }),
+          recallFn.metricDuration({ statistic: "Average" }),
+          searchMemoryFn.metricDuration({ statistic: "Average" }),
+        ],
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: "S3 Vector File Operations",
+        left: [
+          validateUploadFn.metricInvocations(),
+          maintenanceFn.metricInvocations(),
+          sketchBuilderFn.metricInvocations(),
+        ],
+        width: 12,
+        height: 6,
+      })
+    );
+
     // ── AWS Backup ──────────────────────────────────────────────────
 
     // Create backup vault
