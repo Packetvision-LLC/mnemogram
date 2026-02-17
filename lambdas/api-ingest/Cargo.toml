@@ -19,5 +19,6 @@ tracing-subscriber.workspace = true
 aws-config.workspace = true
 aws-sdk-s3.workspace = true
 aws-sdk-dynamodb.workspace = true
+aws-sdk-sqs.workspace = true
 uuid.workspace = true
 chrono.workspace = true
