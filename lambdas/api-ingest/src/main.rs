@@ -208,7 +208,9 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
 
     // Update ingest threshold tracking (only for completed uploads)
     if file_size > 0 {
-        if let Err(e) = update_ingest_threshold_tracking(&dynamodb_client, &user_id, &timestamp).await {
+        if let Err(e) =
+            update_ingest_threshold_tracking(&dynamodb_client, &user_id, &timestamp).await
+        {
             warn!("Failed to update ingest threshold tracking: {}", e);
             // Don't fail the ingest for threshold tracking errors
         }
@@ -261,7 +263,9 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         }
 
         // Check if we should trigger index rebuild based on thresholds
-        if let Err(e) = check_and_trigger_index_rebuild(&dynamodb_client, &sqs_client, &user_id).await {
+        if let Err(e) =
+            check_and_trigger_index_rebuild(&dynamodb_client, &sqs_client, &user_id).await
+        {
             warn!("Failed to check index rebuild threshold: {}", e);
             // Don't fail the ingest for threshold check errors
         }
@@ -335,8 +339,14 @@ async fn update_ingest_threshold_tracking(
 
     // Update daily ingest count for user
     let user_daily_key = HashMap::from([
-        ("pk".to_string(), AttributeValue::S(format!("user#{}", user_id))),
-        ("sk".to_string(), AttributeValue::S(format!("daily#{}", today))),
+        (
+            "pk".to_string(),
+            AttributeValue::S(format!("user#{}", user_id)),
+        ),
+        (
+            "sk".to_string(),
+            AttributeValue::S(format!("daily#{}", today)),
+        ),
     ]);
 
     let _daily_result = dynamodb_client
@@ -351,8 +361,14 @@ async fn update_ingest_threshold_tracking(
 
     // Update hourly ingest count for user (for more fine-grained thresholds)
     let user_hourly_key = HashMap::from([
-        ("pk".to_string(), AttributeValue::S(format!("user#{}", user_id))),
-        ("sk".to_string(), AttributeValue::S(format!("hourly#{}", this_hour))),
+        (
+            "pk".to_string(),
+            AttributeValue::S(format!("user#{}", user_id)),
+        ),
+        (
+            "sk".to_string(),
+            AttributeValue::S(format!("hourly#{}", this_hour)),
+        ),
     ]);
 
     let _hourly_result = dynamodb_client
@@ -363,14 +379,20 @@ async fn update_ingest_threshold_tracking(
         .expression_attribute_names("#ttl", "ttl")
         .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
         .expression_attribute_values(":timestamp", AttributeValue::S(timestamp.to_rfc3339()))
-        .expression_attribute_values(":ttl", AttributeValue::N((timestamp.timestamp() + 86400 * 7).to_string())) // 7 day TTL
+        .expression_attribute_values(
+            ":ttl",
+            AttributeValue::N((timestamp.timestamp() + 86400 * 7).to_string()),
+        ) // 7 day TTL
         .send()
         .await?;
 
     // Update global daily counters
     let global_daily_key = HashMap::from([
         ("pk".to_string(), AttributeValue::S("global".to_string())),
-        ("sk".to_string(), AttributeValue::S(format!("daily#{}", today))),
+        (
+            "sk".to_string(),
+            AttributeValue::S(format!("daily#{}", today)),
+        ),
     ]);
 
     let _global_result = dynamodb_client
@@ -379,7 +401,7 @@ async fn update_ingest_threshold_tracking(
         .set_key(Some(global_daily_key))
         .update_expression("ADD ingestCount :inc, uniqueUsers :user SET lastUpdated = :timestamp")
         .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
-        .expression_attribute_values(":user", AttributeValue::SS(vec![user_id.to_string()]))
+        .expression_attribute_values(":user", AttributeValue::Ss(vec![user_id.to_string()]))
         .expression_attribute_values(":timestamp", AttributeValue::S(timestamp.to_rfc3339()))
         .send()
         .await?;
@@ -397,11 +419,17 @@ async fn check_and_trigger_index_rebuild(
         .unwrap_or_else(|_| "mnemogram-dev-threshold-tracking".to_string());
 
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    
+
     // Check user's daily ingest count
     let user_daily_key = HashMap::from([
-        ("pk".to_string(), AttributeValue::S(format!("user#{}", user_id))),
-        ("sk".to_string(), AttributeValue::S(format!("daily#{}", today))),
+        (
+            "pk".to_string(),
+            AttributeValue::S(format!("user#{}", user_id)),
+        ),
+        (
+            "sk".to_string(),
+            AttributeValue::S(format!("daily#{}", today)),
+        ),
     ]);
 
     let user_result = dynamodb_client

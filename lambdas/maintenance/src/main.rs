@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use shared::memvid::MemvidClient;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -27,6 +28,7 @@ struct MaintenanceEvent {
 struct SqsRecord {
     body: Option<String>,
     #[serde(rename = "eventSource")]
+    #[allow(dead_code)]
     event_source: Option<String>,
 }
 
@@ -39,6 +41,7 @@ struct ThresholdMessage {
     threshold: String,
     count: u32,
     #[serde(rename = "triggeredAt")]
+    #[allow(dead_code)]
     triggered_at: String,
 }
 
@@ -93,7 +96,10 @@ async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResu
                     Ok(threshold_msg) => {
                         info!(
                             "Processing threshold-triggered rebuild for user {}: {} {} (count: {})",
-                            threshold_msg.user_id, threshold_msg.threshold, threshold_msg.trigger_type, threshold_msg.count
+                            threshold_msg.user_id,
+                            threshold_msg.threshold,
+                            threshold_msg.trigger_type,
+                            threshold_msg.count
                         );
                         user_ids.push(threshold_msg.user_id);
                     }
@@ -111,12 +117,21 @@ async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResu
 
     let (scan_result, is_user_specific) = if !target_user_ids.is_empty() {
         // User-specific processing
-        info!("Processing {} specific users for maintenance", target_user_ids.len());
-        (get_user_memories(&dynamo_client, &memories_table, &target_user_ids).await?, true)
+        info!(
+            "Processing {} specific users for maintenance",
+            target_user_ids.len()
+        );
+        (
+            get_user_memories(&dynamo_client, &memories_table, &target_user_ids).await?,
+            true,
+        )
     } else {
         // General scheduled maintenance
         info!("Processing all active memories for scheduled maintenance");
-        (get_all_active_memories(&dynamo_client, &memories_table).await?, false)
+        (
+            get_all_active_memories(&dynamo_client, &memories_table).await?,
+            false,
+        )
     };
 
     // Process the memories
@@ -131,7 +146,7 @@ async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResu
     let now = Utc::now();
     let seven_days_ago = now - chrono::Duration::days(7);
 
-    for item in scan_result {
+    for item in &scan_result {
         let memory_id: String = item
             .get("memoryId")
             .and_then(|v: &AttributeValue| v.as_s().ok())
@@ -411,9 +426,8 @@ async fn get_user_memories(
             .await?;
 
         loop {
-            if let Some(items) = query_result.items() {
-                all_items.extend(items.iter().cloned());
-            }
+            let items = query_result.items();
+            all_items.extend(items.iter().cloned());
 
             // Check if there are more items to query
             if let Some(last_key) = query_result.last_evaluated_key() {
@@ -453,9 +467,8 @@ async fn get_all_active_memories(
         .await?;
 
     loop {
-        if let Some(items) = scan_result.items() {
-            all_items.extend(items.iter().cloned());
-        }
+        let items = scan_result.items();
+        all_items.extend(items.iter().cloned());
 
         // Check if there are more items to scan
         if let Some(last_key) = scan_result.last_evaluated_key() {
