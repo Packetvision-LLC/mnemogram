@@ -41,7 +41,14 @@ cd lambdas && cargo check --workspace && cd ..
 cd infra && npm ci && cd ..
 print_status "Dependencies check completed"
 
-# Step 3: Rust TypeScript Check & Formatting
+# Step 3: Check cargo-lambda prerequisite
+echo "🛠️  Checking Lambda build prerequisites..."
+command -v cargo-lambda >/dev/null 2>&1 || { print_error "cargo-lambda not found - install with: pip3 install cargo-lambda"; VALIDATION_FAILED=1; }
+if [ $VALIDATION_FAILED -eq 0 ]; then
+    print_status "Lambda build prerequisites check passed"
+fi
+
+# Step 4: Rust Check & Formatting
 echo "🦀 Running Rust checks..."
 cd lambdas
 
@@ -75,7 +82,25 @@ fi
 
 cd ..
 
-# Step 4: CDK TypeScript Checks
+# Step 5: Lambda Build (Required for CDK synthesis)
+echo "🚀 Building Lambda functions..."
+cd lambdas
+
+# Set PATH for ring crate compilation
+export PATH="/home/linuxbrew/.linuxbrew/Cellar/binutils/2.46.0/bin:$PATH"
+
+echo "  - Building Lambda functions for ARM64..."
+if ! cargo lambda build --release --target aarch64-unknown-linux-musl; then
+    print_error "Lambda build failed"
+    print_warning "Check that cargo-lambda is installed and PATH includes binutils"
+    VALIDATION_FAILED=1
+else
+    print_status "Lambda functions built successfully"
+fi
+
+cd ..
+
+# Step 6: CDK TypeScript Checks
 echo "📦 Running CDK checks..."
 cd infra
 
@@ -99,7 +124,7 @@ fi
 
 cd ..
 
-# Step 5: Security Audit (if available)
+# Step 7: Security Audit (if available)
 echo "🔒 Running security checks..."
 cd lambdas
 if command -v cargo-audit >/dev/null 2>&1; then
