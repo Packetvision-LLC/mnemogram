@@ -269,7 +269,7 @@ impl MemvidClient {
         }
 
         // Simple heuristic - if it looks like binary data with reasonable structure
-        let has_structure = bytes.iter().any(|&b| b == 0) && // Contains null bytes (binary)
+        let has_structure = bytes.contains(&0) && // Contains null bytes (binary)
                            bytes.iter().any(|&b| b > 32); // Contains printable chars too
 
         Ok(has_structure)

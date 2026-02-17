@@ -208,7 +208,7 @@ impl Validator {
         let limit = limit.unwrap_or(10);
         let offset = offset.unwrap_or(0);
 
-        if limit < 1 || limit > 100 {
+        if !(1..=100).contains(&limit) {
             return Err(MnemogramError::ValidationError(
                 "Limit must be between 1 and 100".to_string(),
             ));

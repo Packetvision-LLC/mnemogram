@@ -7,12 +7,14 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 struct AuthorizerEvent {
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     event_type: String,
     #[serde(rename = "authorizationToken")]
     authorization_token: Option<String>,
     #[serde(rename = "methodArn")]
     method_arn: String,
     #[serde(rename = "requestContext")]
+    #[allow(dead_code)]
     request_context: Value,
     headers: Option<HashMap<String, String>>,
 }
@@ -45,6 +47,7 @@ struct PolicyStatement {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Claims {
     sub: String,
     email: String,
@@ -59,6 +62,7 @@ struct UserRecord {
     email: String,
     subscription_tier: String,
     subscription_status: String,
+    #[allow(dead_code)]
     api_key: String,
     rate_limit_tier: String,
 }
@@ -194,7 +198,7 @@ fn generate_policy(method_arn: &str, subscription_tier: &str) -> PolicyDocument 
     // Parse ARN to create resource pattern
     let resource = if method_arn.contains("/v1/") {
         // Allow all v1 endpoints for active subscribers
-        method_arn.replace("/v1/*", "/v1/*")
+        method_arn.to_string()
     } else {
         method_arn.to_string()
     };

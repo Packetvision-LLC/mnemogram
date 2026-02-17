@@ -1,9 +1,9 @@
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_s3 as s3;
-use aws_sdk_sqs;
+use aws_sdk_sqs::Client as SqsClient;
 use chrono::Utc;
-use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
+use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde_json::json;
 use std::collections::HashMap;
 use tracing::{error, info, warn};
@@ -18,7 +18,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let s3_client = s3::Client::new(&config);
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
-    let sqs_client = aws_sdk_sqs::Client::new(&config);
+    let sqs_client = SqsClient::new(&config);
 
     // Get user ID from request context (set by authorizer)
     let user_id = match extract_user_id::extract_user_id_from_context(&event) {

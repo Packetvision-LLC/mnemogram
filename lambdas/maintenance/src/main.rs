@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use shared::memvid::MemvidClient;
-use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -17,6 +16,7 @@ use tracing::{error, info, warn};
 struct MaintenanceEvent {
     // CloudWatch Events schedule - can be empty
     #[serde(default)]
+    #[allow(dead_code)]
     source: String,
     // SQS Records for threshold-triggered rebuilds
     #[serde(rename = "Records")]
@@ -149,7 +149,7 @@ async fn handler(event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceResu
             // Check lastVacuumedAt to see if we need to process this memory
             match item.get("lastVacuumedAt") {
                 Some(AttributeValue::S(last_vacuumed_str)) => {
-                    match DateTime::parse_from_rfc3339(&last_vacuumed_str) {
+                    match DateTime::parse_from_rfc3339(last_vacuumed_str) {
                         Ok(last_vacuumed) => {
                             let last_vacuumed_utc = last_vacuumed.with_timezone(&Utc);
                             last_vacuumed_utc < seven_days_ago
@@ -264,7 +264,7 @@ async fn process_memory(
         .send()
         .await?;
 
-    let original_size = obj.content_length().unwrap_or(0) as i64;
+    let original_size = obj.content_length().unwrap_or(0);
     let data = obj.body.collect().await?.into_bytes();
 
     // Save to temporary file

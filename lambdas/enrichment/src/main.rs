@@ -269,7 +269,7 @@ async fn enrich_memory(
         .send()
         .await?;
 
-    let original_size = obj.content_length().unwrap_or(0) as i64;
+    let original_size = obj.content_length().unwrap_or(0);
     let data = obj.body.collect().await?.into_bytes();
 
     // Save to temporary file
@@ -344,7 +344,7 @@ async fn enrich_memory(
         .metadata("enrichment-engine", engine)
         .metadata(
             "enrichment-timestamp",
-            &chrono::Utc::now().timestamp().to_string(),
+            chrono::Utc::now().timestamp().to_string(),
         )
         .send()
         .await?;
