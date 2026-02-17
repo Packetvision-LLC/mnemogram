@@ -1,7 +1,7 @@
+use aws_sdk_dynamodb::Client as DynamoClient;
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use aws_sdk_dynamodb::Client as DynamoClient;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -88,7 +88,10 @@ async fn handler(event: LambdaEvent<AuthorizerEvent>) -> Result<AuthorizerRespon
     let mut context = HashMap::new();
     context.insert("userId".to_string(), user.user_id.clone());
     context.insert("email".to_string(), user.email.clone());
-    context.insert("subscriptionTier".to_string(), user.subscription_tier.clone());
+    context.insert(
+        "subscriptionTier".to_string(),
+        user.subscription_tier.clone(),
+    );
     context.insert("rateLimitTier".to_string(), user.rate_limit_tier.clone());
 
     Ok(AuthorizerResponse {
@@ -124,7 +127,8 @@ async fn validate_api_key_and_subscription(
     client: &DynamoClient,
     api_key: &str,
 ) -> Result<UserRecord, Error> {
-    let table_name = std::env::var("USERS_TABLE").unwrap_or_else(|_| "mnemogram-dev-users".to_string());
+    let table_name =
+        std::env::var("USERS_TABLE").unwrap_or_else(|_| "mnemogram-dev-users".to_string());
 
     // Query DynamoDB for user by API key (GSI lookup)
     let result = client
@@ -132,7 +136,10 @@ async fn validate_api_key_and_subscription(
         .table_name(&table_name)
         .index_name("api-key-index")
         .key_condition_expression("api_key = :api_key")
-        .expression_attribute_values(":api_key", aws_sdk_dynamodb::types::AttributeValue::S(api_key.to_string()))
+        .expression_attribute_values(
+            ":api_key",
+            aws_sdk_dynamodb::types::AttributeValue::S(api_key.to_string()),
+        )
         .send()
         .await
         .map_err(|e| format!("DynamoDB query failed: {}", e))?;
@@ -145,25 +152,29 @@ async fn validate_api_key_and_subscription(
     let item = &items[0];
 
     // Extract user data from DynamoDB item
-    let user_id = item.get("user_id")
+    let user_id = item
+        .get("user_id")
         .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .ok_or("Missing user_id")?;
-    
-    let email = item.get("email")
+
+    let email = item
+        .get("email")
         .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .ok_or("Missing email")?;
-    
-    let subscription_tier = item.get("subscription_tier")
+
+    let subscription_tier = item
+        .get("subscription_tier")
         .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .map_or("free", |s| s.as_str());
-    
-    let subscription_status = item.get("subscription_status")
+
+    let subscription_status = item
+        .get("subscription_status")
         .and_then(|v: &aws_sdk_dynamodb::types::AttributeValue| v.as_s().ok())
         .map_or("inactive", |s| s.as_str());
 
     let rate_limit_tier = match subscription_tier {
         "enterprise" => "enterprise", // 1000 req/sec
-        "pro" => "pro",               // 100 req/sec  
+        "pro" => "pro",               // 100 req/sec
         _ => "free",                  // 10 req/sec
     };
 

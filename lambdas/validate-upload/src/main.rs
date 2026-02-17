@@ -4,8 +4,8 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
-use shared::memvid::MemvidClient;
 use shared::errors::MnemogramError;
+use shared::memvid::MemvidClient;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
@@ -64,7 +64,7 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
     let s3_client = S3Client::new(&config);
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
     let sqs_client = SqsClient::new(&config);
-    
+
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
 
@@ -82,7 +82,12 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
         let key = record.s3.object.key;
         let size = record.s3.object.size;
 
-        tracing::info!("Processing uploaded file: s3://{}/{} ({} bytes)", bucket, key, size);
+        tracing::info!(
+            "Processing uploaded file: s3://{}/{} ({} bytes)",
+            bucket,
+            key,
+            size
+        );
 
         // Extract memory ID from S3 key (format: memories/{memory_id}.mv2)
         let memory_id = if let Some(captures) = regex::Regex::new(r"memories/([^/]+)\.mv2$")
@@ -91,7 +96,10 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
         {
             captures.get(1).unwrap().as_str().to_string()
         } else {
-            tracing::warn!("S3 key {} doesn't match expected format memories/{{memory_id}}.mv2", key);
+            tracing::warn!(
+                "S3 key {} doesn't match expected format memories/{{memory_id}}.mv2",
+                key
+            );
             continue;
         };
 
@@ -103,13 +111,20 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
         let new_frame_count = frame_count_result.unwrap_or(0);
 
         // Get the previous frame count from DynamoDB
-        let previous_frame_count = get_previous_frame_count(&dynamodb_client, &memories_table, &memory_id).await.unwrap_or(0);
+        let previous_frame_count =
+            get_previous_frame_count(&dynamodb_client, &memories_table, &memory_id)
+                .await
+                .unwrap_or(0);
 
         // Validate the .mv2 file
         let validation_result = match bucket_specific_client.validate_mv2_file(&memory_id).await {
             Ok(is_valid) => {
                 if is_valid {
-                    tracing::info!("Successfully validated .mv2 file for memory {} - {} frames", memory_id, new_frame_count);
+                    tracing::info!(
+                        "Successfully validated .mv2 file for memory {} - {} frames",
+                        memory_id,
+                        new_frame_count
+                    );
                     "valid"
                 } else {
                     tracing::error!("Invalid .mv2 file format for memory {}", memory_id);
@@ -117,7 +132,11 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
                 }
             }
             Err(MnemogramError::S3Error(msg)) => {
-                tracing::error!("Failed to validate .mv2 file for memory {}: {}", memory_id, msg);
+                tracing::error!(
+                    "Failed to validate .mv2 file for memory {}: {}",
+                    memory_id,
+                    msg
+                );
                 "error"
             }
             Err(e) => {
@@ -133,9 +152,8 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
             _ => "validation_error",
         };
 
-        let key_attrs = HashMap::from([
-            ("memoryId".to_string(), AttributeValue::S(memory_id.clone()))
-        ]);
+        let key_attrs =
+            HashMap::from([("memoryId".to_string(), AttributeValue::S(memory_id.clone()))]);
 
         let mut update_expression = "SET #status = :status, #sizeBytes = :sizeBytes, #updatedAt = :updatedAt, #frameCount = :frameCount".to_string();
         let mut expression_attribute_names = HashMap::new();
@@ -146,20 +164,36 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
         expression_attribute_names.insert("#updatedAt".to_string(), "updatedAt".to_string());
         expression_attribute_names.insert("#frameCount".to_string(), "frameCount".to_string());
 
-        expression_attribute_values.insert(":status".to_string(), AttributeValue::S(status.to_string()));
-        expression_attribute_values.insert(":sizeBytes".to_string(), AttributeValue::N(size.to_string()));
-        expression_attribute_values.insert(":updatedAt".to_string(), AttributeValue::S(chrono::Utc::now().to_rfc3339()));
-        expression_attribute_values.insert(":frameCount".to_string(), AttributeValue::N(new_frame_count.to_string()));
+        expression_attribute_values
+            .insert(":status".to_string(), AttributeValue::S(status.to_string()));
+        expression_attribute_values.insert(
+            ":sizeBytes".to_string(),
+            AttributeValue::N(size.to_string()),
+        );
+        expression_attribute_values.insert(
+            ":updatedAt".to_string(),
+            AttributeValue::S(chrono::Utc::now().to_rfc3339()),
+        );
+        expression_attribute_values.insert(
+            ":frameCount".to_string(),
+            AttributeValue::N(new_frame_count.to_string()),
+        );
 
         if validation_result != "valid" {
             update_expression.push_str(", #validationError = :validationError");
-            expression_attribute_names.insert("#validationError".to_string(), "validationError".to_string());
-            
+            expression_attribute_names.insert(
+                "#validationError".to_string(),
+                "validationError".to_string(),
+            );
+
             let error_msg = match validation_result {
                 "invalid" => "File format is not a valid .mv2 memory file",
                 _ => "Failed to validate memory file",
             };
-            expression_attribute_values.insert(":validationError".to_string(), AttributeValue::S(error_msg.to_string()));
+            expression_attribute_values.insert(
+                ":validationError".to_string(),
+                AttributeValue::S(error_msg.to_string()),
+            );
         }
 
         let update_result = dynamodb_client
@@ -174,22 +208,40 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
 
         match update_result {
             Ok(_) => {
-                tracing::info!("Updated memory {} status to {} with {} frames", memory_id, status, new_frame_count);
-                
+                tracing::info!(
+                    "Updated memory {} status to {} with {} frames",
+                    memory_id,
+                    status,
+                    new_frame_count
+                );
+
                 // Check if we should trigger an index rebuild (MNEM-158)
-                if validation_result == "valid" && 
-                   new_frame_count > previous_frame_count + 100 &&
-                   index_rebuild_queue_url.is_some() 
+                if validation_result == "valid"
+                    && new_frame_count > previous_frame_count + 100
+                    && index_rebuild_queue_url.is_some()
                 {
                     let frame_increase = new_frame_count - previous_frame_count;
-                    tracing::info!("Memory {} frame count increased by {} ({}→{}), triggering index rebuild", 
-                                   memory_id, frame_increase, previous_frame_count, new_frame_count);
-                    
-                    if let Err(e) = trigger_index_rebuild(&sqs_client, 
-                                                         index_rebuild_queue_url.as_ref().unwrap(), 
-                                                         &memory_id, 
-                                                         new_frame_count).await {
-                        tracing::error!("Failed to trigger index rebuild for memory {}: {}", memory_id, e);
+                    tracing::info!(
+                        "Memory {} frame count increased by {} ({}→{}), triggering index rebuild",
+                        memory_id,
+                        frame_increase,
+                        previous_frame_count,
+                        new_frame_count
+                    );
+
+                    if let Err(e) = trigger_index_rebuild(
+                        &sqs_client,
+                        index_rebuild_queue_url.as_ref().unwrap(),
+                        &memory_id,
+                        new_frame_count,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "Failed to trigger index rebuild for memory {}: {}",
+                            memory_id,
+                            e
+                        );
                     }
                 }
             }
@@ -202,7 +254,11 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
     Ok(())
 }
 
-async fn get_frame_count(s3_client: &S3Client, bucket: &str, key: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+async fn get_frame_count(
+    s3_client: &S3Client,
+    bucket: &str,
+    key: &str,
+) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     // Download the .mv2 file to get frame count
     let obj = s3_client
         .get_object()
@@ -223,7 +279,9 @@ async fn get_frame_count(s3_client: &S3Client, bucket: &str, key: &str) -> Resul
     Ok(stats.frame_count)
 }
 
-async fn get_memvid_stats(file_path: &Path) -> Result<MemvidStats, Box<dyn std::error::Error + Send + Sync>> {
+async fn get_memvid_stats(
+    file_path: &Path,
+) -> Result<MemvidStats, Box<dyn std::error::Error + Send + Sync>> {
     let memvid_path = if Path::new("/opt/bin/memvid").exists() {
         "/opt/bin/memvid"
     } else {
@@ -244,7 +302,7 @@ async fn get_memvid_stats(file_path: &Path) -> Result<MemvidStats, Box<dyn std::
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stats: serde_json::Value = serde_json::from_str(&stdout)?;
-    
+
     let frame_count = stats
         .get("frame_count")
         .or_else(|| stats.get("frames"))
@@ -255,9 +313,9 @@ async fn get_memvid_stats(file_path: &Path) -> Result<MemvidStats, Box<dyn std::
 }
 
 async fn get_previous_frame_count(
-    dynamodb_client: &aws_sdk_dynamodb::Client, 
-    table_name: &str, 
-    memory_id: &str
+    dynamodb_client: &aws_sdk_dynamodb::Client,
+    table_name: &str,
+    memory_id: &str,
 ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     let result = dynamodb_client
         .get_item()
@@ -267,7 +325,8 @@ async fn get_previous_frame_count(
         .send()
         .await?;
 
-    let frame_count = result.item()
+    let frame_count = result
+        .item()
         .and_then(|item| item.get("frameCount"))
         .and_then(|attr| attr.as_n().ok())
         .and_then(|n| n.parse::<i64>().ok())
@@ -297,7 +356,10 @@ async fn trigger_index_rebuild(
         .send()
         .await?;
 
-    tracing::info!("Sent index rebuild message for memory {} to SQS queue", memory_id);
+    tracing::info!(
+        "Sent index rebuild message for memory {} to SQS queue",
+        memory_id
+    );
     Ok(())
 }
 

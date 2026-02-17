@@ -120,22 +120,31 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Get all memories for this user from DynamoDB
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
-    
+
     let bucket = std::env::var("STORAGE_BUCKET")
         .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
-    
+
     // Use a query to find all memories for the user
     let _key_condition = "#userId = :userId";
     let _filter_condition = "#status = :status1 OR #status = :status2";
-    
+
     let mut expression_attribute_names = HashMap::new();
     expression_attribute_names.insert("#userId".to_string(), "userId".to_string());
     expression_attribute_names.insert("#status".to_string(), "status".to_string());
-    
+
     let mut expression_attribute_values = HashMap::new();
-    expression_attribute_values.insert(":userId".to_string(), AttributeValue::S(user_id.to_string()));
-    expression_attribute_values.insert(":status1".to_string(), AttributeValue::S("ready".to_string()));
-    expression_attribute_values.insert(":status2".to_string(), AttributeValue::S("indexed".to_string()));
+    expression_attribute_values.insert(
+        ":userId".to_string(),
+        AttributeValue::S(user_id.to_string()),
+    );
+    expression_attribute_values.insert(
+        ":status1".to_string(),
+        AttributeValue::S("ready".to_string()),
+    );
+    expression_attribute_values.insert(
+        ":status2".to_string(),
+        AttributeValue::S("indexed".to_string()),
+    );
 
     // For now, we'll do a scan since we might not have a GSI on userId yet
     let scan_result = dynamodb_client
@@ -175,16 +184,24 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             // Search this memory using memvid
             // Use smaller top_k per memory to stay within total limit
             let per_memory_k = std::cmp::min(8, request_body.top_k);
-            
-            match memvid_client.search(memory_id, &request_body.query, per_memory_k).await {
+
+            match memvid_client
+                .search(memory_id, &request_body.query, per_memory_k)
+                .await
+            {
                 Ok(memvid_results) => {
                     let memory_results: Vec<RecallResult> = memvid_results
                         .into_iter()
-                        .map(|result| RecallResult::from_memvid_result(
-                            result, memory_id, memory_name, created_at
-                        ))
+                        .map(|result| {
+                            RecallResult::from_memvid_result(
+                                result,
+                                memory_id,
+                                memory_name,
+                                created_at,
+                            )
+                        })
                         .collect();
-                    
+
                     all_results.extend(memory_results);
                 }
                 Err(e) => {
@@ -196,7 +213,11 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     }
 
     // Sort by relevance score (descending)
-    all_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    all_results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Limit results to requested top_k
     all_results.truncate(request_body.top_k);

@@ -1,8 +1,8 @@
 pub mod errors;
-pub mod middleware;
 pub mod logging;
-pub mod validation;
 pub mod memvid;
+pub mod middleware;
+pub mod validation;
 
 // Future modules:
 // pub mod auth;    // JWT validation

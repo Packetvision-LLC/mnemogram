@@ -10,7 +10,7 @@ use tempfile::NamedTempFile;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod extract_user_id;
@@ -72,10 +72,11 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
 
     // Get memory metadata from DynamoDB
     let memories_table = std::env::var("MEMORIES_TABLE").unwrap_or_default();
-    
-    let key = HashMap::from([
-        ("memoryId".to_string(), AttributeValue::S(memory_id.to_string())),
-    ]);
+
+    let key = HashMap::from([(
+        "memoryId".to_string(),
+        AttributeValue::S(memory_id.to_string()),
+    )]);
 
     let get_result = dynamodb_client
         .get_item()
@@ -105,7 +106,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .and_then(|v| v.as_s().ok())
         .map(|s| s.as_str())
         .unwrap_or("");
-    
+
     if memory_user_id != user_id {
         return Ok(Response::builder()
             .status(403)
@@ -132,19 +133,14 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .unwrap_or(&default_bucket);
 
     // Download .mv2 file from S3 and use memvid-core to search
-    let search_results = search_memory_with_memvid(
-        &s3_client,
-        s3_bucket,
-        s3_key,
-        query_text,
-        memory_id,
-        limit,
-    ).await?;
+    let search_results =
+        search_memory_with_memvid(&s3_client, s3_bucket, s3_key, query_text, memory_id, limit)
+            .await?;
 
     // Update usage tracking
     let usage_table = std::env::var("USAGE_TABLE").unwrap_or_default();
     let today = Utc::now().format("%Y-%m-%d").to_string();
-    
+
     let usage_key = HashMap::from([
         ("userId".to_string(), AttributeValue::S(user_id.to_string())),
         ("date".to_string(), AttributeValue::S(today)),
@@ -188,12 +184,15 @@ async fn search_memory_with_memvid(
     memory_id: &str,
     limit: usize,
 ) -> Result<Vec<Value>, Box<dyn std::error::Error + Send + Sync>> {
-    info!("Downloading memory file from S3: s3://{}/{}", s3_bucket, s3_key);
-    
+    info!(
+        "Downloading memory file from S3: s3://{}/{}",
+        s3_bucket, s3_key
+    );
+
     // Create a temporary file to store the downloaded .mv2 file
     let temp_file = NamedTempFile::new()?;
     let temp_path = temp_file.path();
-    
+
     // Download the .mv2 file from S3
     let get_object_result = s3_client
         .get_object()
@@ -202,25 +201,25 @@ async fn search_memory_with_memvid(
         .send()
         .await
         .map_err(|e| format!("Failed to download .mv2 file from S3: {}", e))?;
-    
+
     let mut body = get_object_result.body.into_async_read();
     let mut temp_file_write = File::create(temp_path).await?;
-    
+
     // Stream the S3 object to the temporary file
     tokio::io::copy(&mut body, &mut temp_file_write).await?;
     temp_file_write.flush().await?;
-    
+
     info!("Downloaded memory file to: {:?}", temp_path);
-    
+
     // Find the memvid binary
     let memvid_path = if Path::new("/opt/bin/memvid").exists() {
         "/opt/bin/memvid"
     } else {
         "/home/stuart/.npm-global/bin/memvid"
     };
-    
+
     info!("Using memvid binary: {}", memvid_path);
-    
+
     // Run memvid find command
     let output = Command::new(memvid_path)
         .arg("find")
@@ -235,32 +234,44 @@ async fn search_memory_with_memvid(
         .output()
         .await
         .map_err(|e| format!("Failed to execute memvid command: {}", e))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("Memvid search failed: {}", stderr);
         return Err(format!("Memvid search failed: {}", stderr).into());
     }
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     info!("Memvid output: {}", stdout);
-    
+
     // Parse the JSON output from memvid
     let memvid_results: Value = serde_json::from_str(&stdout)
         .map_err(|e| format!("Failed to parse memvid JSON output: {}", e))?;
-    
+
     let mut api_results = Vec::new();
-    
+
     // Convert memvid results to API format
     if let Some(results_array) = memvid_results.get("results").and_then(|r| r.as_array()) {
         for result in results_array {
             let snippet = result.get("snippet").and_then(|s| s.as_str()).unwrap_or("");
             let score = result.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
-            let frame_id = result.get("frame_id").and_then(|f| f.as_str()).unwrap_or("");
-            let timestamp = result.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
-            let start_time = result.get("start_time").and_then(|s| s.as_f64()).unwrap_or(0.0);
-            let end_time = result.get("end_time").and_then(|e| e.as_f64()).unwrap_or(0.0);
-            
+            let frame_id = result
+                .get("frame_id")
+                .and_then(|f| f.as_str())
+                .unwrap_or("");
+            let timestamp = result
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            let start_time = result
+                .get("start_time")
+                .and_then(|s| s.as_f64())
+                .unwrap_or(0.0);
+            let end_time = result
+                .get("end_time")
+                .and_then(|e| e.as_f64())
+                .unwrap_or(0.0);
+
             api_results.push(json!({
                 "memoryId": memory_id,
                 "relevanceScore": score,
@@ -278,11 +289,23 @@ async fn search_memory_with_memvid(
         for result in results_array {
             let snippet = result.get("snippet").and_then(|s| s.as_str()).unwrap_or("");
             let score = result.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
-            let frame_id = result.get("frame_id").and_then(|f| f.as_str()).unwrap_or("");
-            let timestamp = result.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
-            let start_time = result.get("start_time").and_then(|s| s.as_f64()).unwrap_or(0.0);
-            let end_time = result.get("end_time").and_then(|e| e.as_f64()).unwrap_or(0.0);
-            
+            let frame_id = result
+                .get("frame_id")
+                .and_then(|f| f.as_str())
+                .unwrap_or("");
+            let timestamp = result
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            let start_time = result
+                .get("start_time")
+                .and_then(|s| s.as_f64())
+                .unwrap_or(0.0);
+            let end_time = result
+                .get("end_time")
+                .and_then(|e| e.as_f64())
+                .unwrap_or(0.0);
+
             api_results.push(json!({
                 "memoryId": memory_id,
                 "relevanceScore": score,
@@ -298,8 +321,11 @@ async fn search_memory_with_memvid(
     } else {
         warn!("Unexpected memvid output format: {}", memvid_results);
     }
-    
-    info!("Converted {} memvid results to API format", api_results.len());
+
+    info!(
+        "Converted {} memvid results to API format",
+        api_results.len()
+    );
     Ok(api_results)
 }
 

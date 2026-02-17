@@ -97,25 +97,40 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let bucket_name = std::env::var("STORAGE_BUCKET")
         .or_else(|_| std::env::var("MEMORY_BUCKET"))
         .map_err(|_| "STORAGE_BUCKET or MEMORY_BUCKET environment variable not set")?;
-    
+
     // Use .mv2 extension for memvid format
     let s3_key = format!("memories/{}.mv2", memory_id);
 
     // Create metadata record in memories table
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
-    
+
     let mut item = HashMap::new();
     item.insert("memoryId".to_string(), AttributeValue::S(memory_id.clone()));
     item.insert("userId".to_string(), AttributeValue::S(user_id.to_string()));
-    item.insert("name".to_string(), AttributeValue::S(request_body.name.clone()));
+    item.insert(
+        "name".to_string(),
+        AttributeValue::S(request_body.name.clone()),
+    );
     item.insert("s3Key".to_string(), AttributeValue::S(s3_key.clone()));
-    item.insert("s3Bucket".to_string(), AttributeValue::S(bucket_name.clone()));
-    item.insert("createdAt".to_string(), AttributeValue::S(timestamp.to_rfc3339()));
-    item.insert("status".to_string(), AttributeValue::S("pending_upload".to_string()));
-    
+    item.insert(
+        "s3Bucket".to_string(),
+        AttributeValue::S(bucket_name.clone()),
+    );
+    item.insert(
+        "createdAt".to_string(),
+        AttributeValue::S(timestamp.to_rfc3339()),
+    );
+    item.insert(
+        "status".to_string(),
+        AttributeValue::S("pending_upload".to_string()),
+    );
+
     if let Some(description) = &request_body.description {
-        item.insert("description".to_string(), AttributeValue::S(description.clone()));
+        item.insert(
+            "description".to_string(),
+            AttributeValue::S(description.clone()),
+        );
     }
 
     // Initially set sizeBytes to 0 - will be updated after upload
@@ -136,9 +151,8 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .key(&s3_key)
         .content_type("application/octet-stream")
         .presigned(
-            s3::presigning::PresigningConfig::expires_in(
-                std::time::Duration::from_secs(15 * 60)
-            ).map_err(Box::new)?
+            s3::presigning::PresigningConfig::expires_in(std::time::Duration::from_secs(15 * 60))
+                .map_err(Box::new)?,
         )
         .await
         .map_err(Box::new)?
@@ -154,17 +168,21 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         };
 
         let message_body = serde_json::to_string(&sketch_message)?;
-        
+
         // Send message to SQS queue for sketch building (best effort)
         if let Err(e) = sqs_client
             .send_message()
             .queue_url(&sketch_queue_url)
             .message_body(message_body)
             .send()
-            .await 
+            .await
         {
             // Log error but don't fail the ingest
-            tracing::warn!("Failed to trigger sketch building for memory {}: {}", memory_id, e);
+            tracing::warn!(
+                "Failed to trigger sketch building for memory {}: {}",
+                memory_id,
+                e
+            );
         } else {
             tracing::info!("Triggered sketch building for memory {}", memory_id);
         }

@@ -39,14 +39,7 @@ export class MnemogramStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       versioned: true,
-      // Intelligent tiering for automatic cost optimization
-      intelligentTieringConfigurations: [
-        {
-          id: "IntelligentTiering",
-          status: s3.IntelligentTieringStatus.ENABLED,
-          optionalFields: [s3.IntelligentTieringOptionalFields.BUCKET_KEY_STATUS],
-        },
-      ],
+      // Lifecycle rules for cost optimization
       lifecycleRules: [
         {
           id: "TransitionToIA",

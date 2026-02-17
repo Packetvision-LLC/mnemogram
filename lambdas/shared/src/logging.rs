@@ -102,7 +102,7 @@ impl StructuredLogger {
         fields.insert("path", json!(path));
         fields.insert("statusCode", json!(status_code));
         fields.insert("durationMs", json!(duration_ms));
-        
+
         if let Some(uid) = user_id {
             fields.insert("userId", json!(uid));
         }
@@ -125,7 +125,7 @@ impl StructuredLogger {
         fields.insert("table", json!(table));
         fields.insert("durationMs", json!(duration_ms));
         fields.insert("success", json!(success));
-        
+
         if let Some(err) = error {
             fields.insert("error", json!(err));
         }
@@ -153,11 +153,11 @@ impl StructuredLogger {
         fields.insert("operation", json!(operation));
         fields.insert("durationMs", json!(duration_ms));
         fields.insert("success", json!(success));
-        
+
         if let Some(code) = status_code {
             fields.insert("statusCode", json!(code));
         }
-        
+
         if let Some(err) = error {
             fields.insert("error", json!(err));
         }
@@ -184,15 +184,15 @@ impl StructuredLogger {
         fields.insert("operation", json!(operation));
         fields.insert("durationMs", json!(duration_ms));
         fields.insert("success", json!(success));
-        
+
         if let Some(mid) = memory_id {
             fields.insert("memoryId", json!(mid));
         }
-        
+
         if let Some(size) = file_size_bytes {
             fields.insert("fileSizeBytes", json!(size));
         }
-        
+
         if let Some(err) = error {
             fields.insert("error", json!(err));
         }
@@ -216,11 +216,11 @@ impl StructuredLogger {
         fields.insert("requestId", json!(request_id));
         fields.insert("eventType", json!(event_type));
         fields.insert("success", json!(success));
-        
+
         if let Some(uid) = user_id {
             fields.insert("userId", json!(uid));
         }
-        
+
         if let Some(err) = error {
             fields.insert("error", json!(err));
         }
@@ -261,19 +261,19 @@ pub fn create_log_context(request_id: &str, function_name: &str) -> HashMap<&'st
     let mut fields = HashMap::new();
     fields.insert("requestId", json!(request_id));
     fields.insert("functionName", json!(function_name));
-    
+
     // Add X-Ray trace ID if available
     if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
         fields.insert("traceId", json!(trace_id));
     }
-    
+
     // Add AWS Lambda request ID if different from our request ID
     if let Ok(aws_request_id) = std::env::var("AWS_REQUEST_ID") {
         if aws_request_id != request_id {
             fields.insert("awsRequestId", json!(aws_request_id));
         }
     }
-    
+
     fields
 }
 
@@ -284,12 +284,12 @@ macro_rules! log_with_context {
         {
             let mut fields = std::collections::HashMap::new();
             fields.insert("requestId", serde_json::json!($request_id));
-            
+
             // Add X-Ray trace ID if available
             if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
                 fields.insert("traceId", serde_json::json!(trace_id));
             }
-            
+
             match $level {
                 "info" => $crate::logging::StructuredLogger::info($message, fields),
                 "warn" => $crate::logging::StructuredLogger::warn($message, fields),
@@ -298,24 +298,24 @@ macro_rules! log_with_context {
             }
         }
     };
-    
+
     ($level:expr, $message:expr, $request_id:expr, $($key:expr => $value:expr),+) => {
         {
             let mut fields = std::collections::HashMap::new();
             fields.insert("requestId", serde_json::json!($request_id));
-            
+
             // Add X-Ray trace ID if available
             if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
                 fields.insert("traceId", serde_json::json!(trace_id));
             }
-            
+
             $(
                 fields.insert($key, serde_json::json!($value));
             )+
-            
+
             match $level {
                 "info" => $crate::logging::StructuredLogger::info($message, fields),
-                "warn" => $crate::logging::StructuredLogger::warn($message, fields), 
+                "warn" => $crate::logging::StructuredLogger::warn($message, fields),
                 "error" => $crate::logging::StructuredLogger::error($message, fields),
                 _ => $crate::logging::StructuredLogger::info($message, fields),
             }

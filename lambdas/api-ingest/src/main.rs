@@ -3,10 +3,10 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_s3 as s3;
 use aws_sdk_sqs;
 use chrono::Utc;
-use lambda_http::{run, service_fn, Body, Error, Request, Response, RequestExt};
+use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde_json::json;
 use std::collections::HashMap;
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
@@ -39,14 +39,14 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Generate a unique memory ID
     let memory_id = Uuid::new_v4().to_string();
     let timestamp = Utc::now();
-    
+
     // Get file metadata from headers
     let content_type = event
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream");
-    
+
     let content_length = event
         .headers()
         .get("content-length")
@@ -84,7 +84,8 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let s3_key = format!("{}/{}.mv2", user_id, memory_id);
 
     // Handle different upload modes based on request
-    let upload_mode = event.headers()
+    let upload_mode = event
+        .headers()
         .get("x-upload-mode")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("direct");
@@ -93,7 +94,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         "presigned" => {
             // Generate a pre-signed URL for large file uploads
             info!("Generating pre-signed URL for memory: {}", memory_id);
-            
+
             let presigned_req = s3_client
                 .put_object()
                 .bucket(&bucket_name)
@@ -101,20 +102,18 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
                 .content_type(content_type);
 
             let presigned_url = presigned_req
-                .presigned(
-                    aws_sdk_s3::presigning::PresigningConfig::expires_in(
-                        std::time::Duration::from_secs(3600) // 1 hour expiry
-                    )?
-                )
+                .presigned(aws_sdk_s3::presigning::PresigningConfig::expires_in(
+                    std::time::Duration::from_secs(3600), // 1 hour expiry
+                )?)
                 .await
                 .map_err(|e| format!("Failed to generate pre-signed URL: {}", e))?;
 
             (0, Some(presigned_url.uri().to_string()))
-        },
+        }
         _ => {
             // Direct upload through Lambda (for smaller files)
             info!("Processing direct upload for memory: {}", memory_id);
-            
+
             let body_bytes = match event.body() {
                 Body::Binary(bytes) => bytes.clone(),
                 Body::Text(text) => text.as_bytes().to_vec(),
@@ -161,24 +160,42 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
 
     // Create metadata record in memories table
     let memories_table = std::env::var("MEMORIES_TABLE").unwrap_or_default();
-    
+
     let mut item = HashMap::new();
     item.insert("memoryId".to_string(), AttributeValue::S(memory_id.clone()));
     item.insert("userId".to_string(), AttributeValue::S(user_id.to_string()));
     item.insert("s3Key".to_string(), AttributeValue::S(s3_key.clone()));
-    item.insert("s3Bucket".to_string(), AttributeValue::S(bucket_name.clone()));
-    item.insert("contentType".to_string(), AttributeValue::S(content_type.to_string()));
-    item.insert("createdAt".to_string(), AttributeValue::S(timestamp.to_rfc3339()));
-    
+    item.insert(
+        "s3Bucket".to_string(),
+        AttributeValue::S(bucket_name.clone()),
+    );
+    item.insert(
+        "contentType".to_string(),
+        AttributeValue::S(content_type.to_string()),
+    );
+    item.insert(
+        "createdAt".to_string(),
+        AttributeValue::S(timestamp.to_rfc3339()),
+    );
+
     // Set different status based on upload mode
     if upload_url.is_some() {
         // Pre-signed URL mode - file not uploaded yet
-        item.insert("status".to_string(), AttributeValue::S("pending_upload".to_string()));
+        item.insert(
+            "status".to_string(),
+            AttributeValue::S("pending_upload".to_string()),
+        );
         item.insert("fileSize".to_string(), AttributeValue::N("0".to_string()));
     } else {
         // Direct upload mode - file already uploaded
-        item.insert("status".to_string(), AttributeValue::S("processing".to_string()));
-        item.insert("fileSize".to_string(), AttributeValue::N(file_size.to_string()));
+        item.insert(
+            "status".to_string(),
+            AttributeValue::S("processing".to_string()),
+        );
+        item.insert(
+            "fileSize".to_string(),
+            AttributeValue::N(file_size.to_string()),
+        );
     }
 
     let _put_item_result = dynamodb_client
@@ -192,7 +209,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Trigger background processing only for direct uploads (pre-signed uploads will be triggered by S3 events)
     if upload_url.is_none() && file_size > 0 {
         info!("Triggering background processing for memory: {}", memory_id);
-        
+
         let processing_message = json!({
             "memoryId": memory_id,
             "userId": user_id,
@@ -201,9 +218,9 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             "fileSize": file_size,
             "uploadedAt": timestamp.to_rfc3339()
         });
-        
+
         let message_body = serde_json::to_string(&processing_message)?;
-        
+
         // Send to enrichment queue for AI processing (memory cards, facts, etc.)
         if let Ok(enrichment_queue_url) = std::env::var("ENRICHMENT_QUEUE_URL") {
             match sqs_client
@@ -217,7 +234,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
                 Err(e) => error!("Failed to send enrichment message: {}", e),
             }
         }
-        
+
         // Send to sketch builder queue for fast search indexing
         if let Ok(sketch_queue_url) = std::env::var("SKETCH_BUILDER_QUEUE_URL") {
             match sqs_client
@@ -227,17 +244,20 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
                 .send()
                 .await
             {
-                Ok(_) => info!("Sent message to sketch builder queue for memory: {}", memory_id),
+                Ok(_) => info!(
+                    "Sent message to sketch builder queue for memory: {}",
+                    memory_id
+                ),
                 Err(e) => error!("Failed to send sketch builder message: {}", e),
             }
         }
     }
-    
+
     // Update usage tracking (only for completed uploads)
     if file_size > 0 {
         let usage_table = std::env::var("USAGE_TABLE").unwrap_or_default();
         let today = timestamp.format("%Y-%m-%d").to_string();
-        
+
         let usage_key = HashMap::from([
             ("userId".to_string(), AttributeValue::S(user_id.to_string())),
             ("date".to_string(), AttributeValue::S(today)),
@@ -268,8 +288,10 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         // Pre-signed URL response
         body["uploadUrl"] = json!(url);
         body["status"] = json!("pending_upload");
-        body["message"] = json!("Pre-signed URL generated. Upload your .mv2 file to the provided URL.");
-        body["instructions"] = json!("Make a PUT request to uploadUrl with your .mv2 file as the request body.");
+        body["message"] =
+            json!("Pre-signed URL generated. Upload your .mv2 file to the provided URL.");
+        body["instructions"] =
+            json!("Make a PUT request to uploadUrl with your .mv2 file as the request body.");
     } else {
         // Direct upload response
         body["status"] = json!("processing");

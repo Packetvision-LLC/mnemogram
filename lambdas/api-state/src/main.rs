@@ -2,11 +2,11 @@ use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde_json::{json, Value};
-use tokio::process::Command;
+use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
-use std::io::Write;
-use tracing::{info, warn, error};
+use tokio::process::Command;
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod extract_user_id;
@@ -65,9 +65,9 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         }
     };
 
-    let bucket_name = std::env::var("MEMORY_BUCKET")
-        .map_err(|_| "MEMORY_BUCKET environment variable not set")?;
-    
+    let bucket_name =
+        std::env::var("MEMORY_BUCKET").map_err(|_| "MEMORY_BUCKET environment variable not set")?;
+
     let subscriptions_table = std::env::var("SUBSCRIPTIONS_TABLE")
         .map_err(|_| "SUBSCRIPTIONS_TABLE environment variable not set")?;
 
@@ -104,7 +104,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
 
     // Verify memory ownership
     match verify_memory_ownership(&dynamodb_client, &memories_table, memory_id, &user_id).await {
-        Ok(true) => {},
+        Ok(true) => {}
         Ok(false) => {
             return Ok(Response::builder()
                 .status(404)
@@ -152,7 +152,10 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Get entity state using memvid
     match get_entity_state(&s3_client, &bucket_name, memory_id, entity).await {
         Ok(Some(state)) => {
-            info!("Successfully retrieved state for entity '{}' in memory {}", entity, memory_id);
+            info!(
+                "Successfully retrieved state for entity '{}' in memory {}",
+                entity, memory_id
+            );
             Ok(Response::builder()
                 .status(200)
                 .header("content-type", "application/json")
@@ -163,18 +166,16 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
                 }))?))
                 .map_err(Box::new)?)
         }
-        Ok(None) => {
-            Ok(Response::builder()
-                .status(404)
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_string(&json!({
-                    "error": "entity_not_found",
-                    "message": format!("Entity '{}' not found in memory", entity),
-                    "memory_id": memory_id,
-                    "entity": entity
-                }))?))
-                .map_err(Box::new)?)
-        }
+        Ok(None) => Ok(Response::builder()
+            .status(404)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&json!({
+                "error": "entity_not_found",
+                "message": format!("Entity '{}' not found in memory", entity),
+                "memory_id": memory_id,
+                "entity": entity
+            }))?))
+            .map_err(Box::new)?),
         Err(e) => {
             error!("Failed to get entity state: {}", e);
             Ok(Response::builder()
@@ -311,7 +312,7 @@ async fn get_entity_state(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // Parse JSON output
     if stdout.trim().is_empty() {
         return Ok(None);

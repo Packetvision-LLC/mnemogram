@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Deserialize)]
 struct SketchBuilderEvent {
@@ -19,14 +19,14 @@ struct SketchBuilderEvent {
 struct EventRecord {
     #[serde(rename = "eventSource")]
     _event_source: Option<String>,
-    
+
     // For SQS messages
     body: Option<String>,
-    
+
     // For DynamoDB Streams
     #[serde(rename = "eventName")]
     event_name: Option<String>,
-    
+
     #[serde(rename = "dynamodb")]
     dynamodb: Option<DynamoDbStreamRecord>,
 }
@@ -75,8 +75,8 @@ async fn handler(event: LambdaEvent<SketchBuilderEvent>) -> Result<SketchBuilder
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let s3_client = S3Client::new(&config);
 
-    let bucket_name = std::env::var("MEMORY_BUCKET")
-        .map_err(|_| "MEMORY_BUCKET environment variable not set")?;
+    let bucket_name =
+        std::env::var("MEMORY_BUCKET").map_err(|_| "MEMORY_BUCKET environment variable not set")?;
 
     let memvid_client = MemvidClient::new(s3_client.clone(), bucket_name.clone());
 
@@ -88,7 +88,7 @@ async fn handler(event: LambdaEvent<SketchBuilderEvent>) -> Result<SketchBuilder
     // Process each record in the event
     for record in event.payload.records {
         let memory_ids = extract_memory_ids_from_record(&record)?;
-        
+
         for memory_id in memory_ids {
             info!("Processing memory {} for sketch building", memory_id);
 
@@ -106,11 +106,14 @@ async fn handler(event: LambdaEvent<SketchBuilderEvent>) -> Result<SketchBuilder
                         size_after_bytes: result.size_after,
                         error_message: None,
                     });
-                    
+
                     info!("Successfully built sketch tracks for memory {}", memory_id);
                 }
                 Err(e) => {
-                    error!("Failed to build sketch tracks for memory {}: {}", memory_id, e);
+                    error!(
+                        "Failed to build sketch tracks for memory {}: {}",
+                        memory_id, e
+                    );
                     error_count += 1;
                     results.push(MemorySketchResult {
                         memory_id: memory_id.clone(),
@@ -129,8 +132,13 @@ async fn handler(event: LambdaEvent<SketchBuilderEvent>) -> Result<SketchBuilder
     let processing_duration = start_time.elapsed();
     let processed_count = results.len() as i32;
 
-    info!("Sketch builder completed: processed={}, success={}, errors={}, duration_ms={}",
-          processed_count, success_count, error_count, processing_duration.as_millis());
+    info!(
+        "Sketch builder completed: processed={}, success={}, errors={}, duration_ms={}",
+        processed_count,
+        success_count,
+        error_count,
+        processing_duration.as_millis()
+    );
 
     Ok(SketchBuilderResult {
         processed_count,
@@ -154,7 +162,8 @@ fn extract_memory_ids_from_record(record: &EventRecord) -> Result<Vec<String>, E
                 warn!("Failed to parse SQS message body: {} - body: {}", e, body);
                 // Try to extract memory_id directly if it's a simple string
                 if let Ok(simple_message) = serde_json::from_str::<serde_json::Value>(body) {
-                    if let Some(memory_id) = simple_message.get("memoryId").and_then(|v| v.as_str()) {
+                    if let Some(memory_id) = simple_message.get("memoryId").and_then(|v| v.as_str())
+                    {
                         memory_ids.push(memory_id.to_string());
                     }
                 }
@@ -173,12 +182,13 @@ fn extract_memory_ids_from_record(record: &EventRecord) -> Result<Vec<String>, E
                         .get("status")
                         .and_then(|v| v.get("S"))
                         .and_then(|v| v.as_str());
-                    
+
                     if status == Some("active") {
                         if let Some(memory_id) = new_image
                             .get("memoryId")
                             .and_then(|v| v.get("S"))
-                            .and_then(|v| v.as_str()) {
+                            .and_then(|v| v.as_str())
+                        {
                             memory_ids.push(memory_id.to_string());
                         }
                     }
@@ -248,7 +258,7 @@ async fn build_sketch_tracks(
 
     // Re-upload the file with sketch tracks to S3
     let sketch_data = std::fs::read(output_temp.path())?;
-    
+
     s3_client
         .put_object()
         .bucket(bucket_name)
@@ -259,8 +269,10 @@ async fn build_sketch_tracks(
         .send()
         .await?;
 
-    info!("Sketch tracks built for memory {}: {} bytes → {} bytes", 
-          memory_id, original_size, final_size);
+    info!(
+        "Sketch tracks built for memory {}: {} bytes → {} bytes",
+        memory_id, original_size, final_size
+    );
 
     Ok(SketchBuildResult {
         size_before: original_size,

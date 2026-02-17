@@ -16,7 +16,7 @@ where
 {
     let context = event.context.clone();
     let request_id = context.request_id.clone();
-    
+
     // Log request start
     info!(
         request_id = %request_id,
@@ -33,9 +33,9 @@ where
         Err(err) => {
             // Log the error with appropriate level
             match err {
-                MnemogramError::Internal(_) 
-                | MnemogramError::Database(_) 
-                | MnemogramError::S3Error(_) 
+                MnemogramError::Internal(_)
+                | MnemogramError::Database(_)
+                | MnemogramError::S3Error(_)
                 | MnemogramError::ExternalService(_) => {
                     error!(
                         request_id = %request_id,
@@ -64,12 +64,13 @@ where
 
             // Create error response
             let error_response = ErrorResponse::new(&err, &request_id);
-            let error_json = serde_json::to_value(error_response)
-                .unwrap_or_else(|_| serde_json::json!({
+            let error_json = serde_json::to_value(error_response).unwrap_or_else(|_| {
+                serde_json::json!({
                     "error": "Failed to serialize error response",
                     "code": "SERIALIZATION_ERROR",
                     "requestId": request_id
-                }));
+                })
+            });
 
             // Return as Lambda error with proper status code
             Err(lambda_runtime::Error::from(format!(
@@ -96,7 +97,7 @@ where
 
     let context = event.context.clone();
     let request_id = context.request_id.clone();
-    
+
     // Log request start with HTTP details
     info!(
         request_id = %request_id,
@@ -109,23 +110,25 @@ where
     match handler(event.payload, context).await {
         Ok(response) => {
             info!(request_id = %request_id, "HTTP request completed successfully");
-            
+
             let body = serde_json::to_string(&response)
                 .unwrap_or_else(|_| r#"{"error": "Serialization failed"}"#.to_string());
-                
+
             Response::builder()
                 .status(200)
                 .header("Content-Type", "application/json")
                 .header("X-Request-ID", request_id)
                 .body(Body::Text(body))
-                .map_err(|e| lambda_runtime::Error::from(format!("Response building failed: {}", e)))
+                .map_err(|e| {
+                    lambda_runtime::Error::from(format!("Response building failed: {}", e))
+                })
         }
         Err(err) => {
             // Log the error
             match err {
-                MnemogramError::Internal(_) 
-                | MnemogramError::Database(_) 
-                | MnemogramError::S3Error(_) 
+                MnemogramError::Internal(_)
+                | MnemogramError::Database(_)
+                | MnemogramError::S3Error(_)
                 | MnemogramError::ExternalService(_) => {
                     error!(
                         request_id = %request_id,
@@ -154,15 +157,18 @@ where
 
             // Create error response
             let error_response = ErrorResponse::new(&err, &request_id);
-            let error_json = serde_json::to_string(&error_response)
-                .unwrap_or_else(|_| r#"{"error": "Serialization failed", "code": "SERIALIZATION_ERROR"}"#.to_string());
+            let error_json = serde_json::to_string(&error_response).unwrap_or_else(|_| {
+                r#"{"error": "Serialization failed", "code": "SERIALIZATION_ERROR"}"#.to_string()
+            });
 
             Response::builder()
                 .status(err.status_code())
                 .header("Content-Type", "application/json")
                 .header("X-Request-ID", request_id)
                 .body(Body::Text(error_json))
-                .map_err(|e| lambda_runtime::Error::from(format!("Error response building failed: {}", e)))
+                .map_err(|e| {
+                    lambda_runtime::Error::from(format!("Error response building failed: {}", e))
+                })
         }
     }
 }
@@ -174,11 +180,21 @@ pub fn get_request_id(context: &Context) -> String {
 
 /// CORS headers helper
 #[cfg(feature = "http")]
-pub fn add_cors_headers(mut response: lambda_http::Response<lambda_http::Body>) -> lambda_http::Response<lambda_http::Body> {
+pub fn add_cors_headers(
+    mut response: lambda_http::Response<lambda_http::Body>,
+) -> lambda_http::Response<lambda_http::Body> {
     let headers = response.headers_mut();
     headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-    headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
-    headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Version".parse().unwrap());
+    headers.insert(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap(),
+    );
+    headers.insert(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, X-API-Version"
+            .parse()
+            .unwrap(),
+    );
     headers.insert("Access-Control-Max-Age", "86400".parse().unwrap());
     response
 }

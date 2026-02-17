@@ -8,19 +8,19 @@ pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
             return Ok(user_id_str.to_string());
         }
     }
-    
+
     // Try to extract from request context as JSON
     let context = event.request_context();
-    
+
     // Serialize the context to JSON to work around type issues
     if let Ok(context_json) = serde_json::to_value(&context) {
         // Try different paths where user ID might be stored
         let possible_paths = [
             ["authorizer", "userId"],
-            ["authorizer", "fields", "userId"], 
+            ["authorizer", "fields", "userId"],
             ["authorizer", "principalId"],
         ];
-        
+
         for path in &possible_paths {
             let mut current = &context_json;
             for segment in path {
@@ -30,12 +30,15 @@ pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
                     break;
                 }
             }
-            
+
             if let Some(user_id_str) = current.as_str() {
                 return Ok(user_id_str.to_string());
             }
         }
     }
-    
-    Err("User ID not found in request context. Make sure the authorizer is properly configured.".to_string())
+
+    Err(
+        "User ID not found in request context. Make sure the authorizer is properly configured."
+            .to_string(),
+    )
 }

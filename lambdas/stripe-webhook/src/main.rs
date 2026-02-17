@@ -1,13 +1,13 @@
 use aws_sdk_dynamodb::Client as DynamoClient;
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::Sha256;
 use std::collections::HashMap;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 
 #[derive(Debug, Deserialize)]
 struct StripeEvent {
@@ -116,9 +116,9 @@ fn verify_stripe_signature(
     let mut mac = Hmac::<Sha256>::new_from_slice(webhook_secret.as_bytes())
         .map_err(|e| format!("Invalid key: {}", e))?;
     mac.update(signed_payload.as_bytes());
-    
+
     let expected_signature = hex::encode(mac.finalize().into_bytes());
-    
+
     if signature == &expected_signature {
         Ok(())
     } else {
@@ -130,7 +130,10 @@ async fn handle_checkout_completed(
     dynamo: &DynamoClient,
     session: CheckoutSession,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Processing checkout.session.completed for session: {}", session.id);
+    info!(
+        "Processing checkout.session.completed for session: {}",
+        session.id
+    );
 
     let user_id = session
         .metadata
@@ -157,12 +160,16 @@ async fn handle_checkout_completed(
         .to_string();
 
     // Extract promo code info if available
-    let promo_code = if session.total_details
+    let promo_code = if session
+        .total_details
         .as_ref()
         .and_then(|td| td.amount_discount)
-        .unwrap_or(0) > 0 {
+        .unwrap_or(0)
+        > 0
+    {
         // If there was a discount, try to get the promo code from metadata
-        session.metadata
+        session
+            .metadata
             .as_ref()
             .and_then(|m| m.get("promoCode"))
             .map(|s| s.clone())
@@ -171,19 +178,43 @@ async fn handle_checkout_completed(
     };
 
     let now = Utc::now().to_rfc3339();
-    
+
     let mut item = HashMap::new();
-    item.insert("userId".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(user_id.clone()));
-    item.insert("stripeCustomerId".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(customer_id.clone()));
-    item.insert("stripeSubscriptionId".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(subscription_id.clone()));
-    item.insert("status".to_string(), aws_sdk_dynamodb::types::AttributeValue::S("active".to_string()));
-    item.insert("billingPeriod".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(billing_period.clone()));
-    item.insert("createdAt".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(now.clone()));
-    item.insert("updatedAt".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(now));
+    item.insert(
+        "userId".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(user_id.clone()),
+    );
+    item.insert(
+        "stripeCustomerId".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(customer_id.clone()),
+    );
+    item.insert(
+        "stripeSubscriptionId".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(subscription_id.clone()),
+    );
+    item.insert(
+        "status".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S("active".to_string()),
+    );
+    item.insert(
+        "billingPeriod".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(billing_period.clone()),
+    );
+    item.insert(
+        "createdAt".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(now.clone()),
+    );
+    item.insert(
+        "updatedAt".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(now),
+    );
 
     // Add promo code if present
     if let Some(promo) = promo_code {
-        item.insert("promoCode".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(promo));
+        item.insert(
+            "promoCode".to_string(),
+            aws_sdk_dynamodb::types::AttributeValue::S(promo),
+        );
         info!("Stored promo code for user: {}", user_id);
     }
 
@@ -194,7 +225,10 @@ async fn handle_checkout_completed(
         .send()
         .await?;
 
-    info!("Created subscription record for user: {} with billing period: {}", user_id, billing_period);
+    info!(
+        "Created subscription record for user: {} with billing period: {}",
+        user_id, billing_period
+    );
     Ok(())
 }
 
@@ -202,7 +236,10 @@ async fn handle_subscription_updated(
     dynamo: &DynamoClient,
     subscription: Subscription,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Processing customer.subscription.updated for subscription: {}", subscription.id);
+    info!(
+        "Processing customer.subscription.updated for subscription: {}",
+        subscription.id
+    );
 
     let user_id = subscription
         .metadata
@@ -211,7 +248,9 @@ async fn handle_subscription_updated(
         .ok_or("Missing userId in subscription metadata")?;
 
     // Extract plan ID from subscription items
-    let plan_id = subscription.items.data
+    let plan_id = subscription
+        .items
+        .data
         .first()
         .and_then(|item| item.price.metadata.as_ref())
         .and_then(|m| m.get("planId"))
@@ -219,14 +258,17 @@ async fn handle_subscription_updated(
         .unwrap_or("unknown");
 
     // Determine billing period from price interval
-    let billing_period = subscription.items.data
+    let billing_period = subscription
+        .items
+        .data
         .first()
         .and_then(|item| item.price.metadata.as_ref())
         .and_then(|m| m.get("billingPeriod"))
         .map(|s| s.as_str())
         .unwrap_or_else(|| {
             // Fallback: try to determine from existing metadata or default to monthly
-            subscription.metadata
+            subscription
+                .metadata
                 .as_ref()
                 .and_then(|m| m.get("billingPeriod"))
                 .map(|s| s.as_str())
@@ -245,22 +287,43 @@ async fn handle_subscription_updated(
 
     expr_attr_names.insert("#status".to_string(), "status".to_string());
     expr_attr_names.insert("#planId".to_string(), "planId".to_string());
-    expr_attr_names.insert("#currentPeriodEnd".to_string(), "currentPeriodEnd".to_string());
+    expr_attr_names.insert(
+        "#currentPeriodEnd".to_string(),
+        "currentPeriodEnd".to_string(),
+    );
     expr_attr_names.insert("#billingPeriod".to_string(), "billingPeriod".to_string());
     expr_attr_names.insert("#updatedAt".to_string(), "updatedAt".to_string());
 
-    expr_attr_values.insert(":status".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(subscription.status.clone()));
-    expr_attr_values.insert(":planId".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(plan_id.to_string()));
-    expr_attr_values.insert(":currentPeriodEnd".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(current_period_end));
-    expr_attr_values.insert(":billingPeriod".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(billing_period.to_string()));
-    expr_attr_values.insert(":updatedAt".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(now));
+    expr_attr_values.insert(
+        ":status".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(subscription.status.clone()),
+    );
+    expr_attr_values.insert(
+        ":planId".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(plan_id.to_string()),
+    );
+    expr_attr_values.insert(
+        ":currentPeriodEnd".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(current_period_end),
+    );
+    expr_attr_values.insert(
+        ":billingPeriod".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(billing_period.to_string()),
+    );
+    expr_attr_values.insert(
+        ":updatedAt".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(now),
+    );
 
     // Handle promo code from discount
     if let Some(discount) = &subscription.discount {
         if let Some(promotion_code) = &discount.promotion_code {
             update_expr.push_str(", #promoCode = :promoCode");
             expr_attr_names.insert("#promoCode".to_string(), "promoCode".to_string());
-            expr_attr_values.insert(":promoCode".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(promotion_code.code.clone()));
+            expr_attr_values.insert(
+                ":promoCode".to_string(),
+                aws_sdk_dynamodb::types::AttributeValue::S(promotion_code.code.clone()),
+            );
             info!("Updated promo code for user: {}", user_id);
         }
     }
@@ -268,14 +331,20 @@ async fn handle_subscription_updated(
     dynamo
         .update_item()
         .table_name(std::env::var("SUBSCRIPTIONS_TABLE")?)
-        .key("userId", aws_sdk_dynamodb::types::AttributeValue::S(user_id.clone()))
+        .key(
+            "userId",
+            aws_sdk_dynamodb::types::AttributeValue::S(user_id.clone()),
+        )
         .update_expression(update_expr)
         .set_expression_attribute_names(Some(expr_attr_names))
         .set_expression_attribute_values(Some(expr_attr_values))
         .send()
         .await?;
 
-    info!("Updated subscription record for user: {} with billing period: {}", user_id, billing_period);
+    info!(
+        "Updated subscription record for user: {} with billing period: {}",
+        user_id, billing_period
+    );
     Ok(())
 }
 
@@ -283,7 +352,10 @@ async fn handle_subscription_deleted(
     dynamo: &DynamoClient,
     subscription: Subscription,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Processing customer.subscription.deleted for subscription: {}", subscription.id);
+    info!(
+        "Processing customer.subscription.deleted for subscription: {}",
+        subscription.id
+    );
 
     let user_id = subscription
         .metadata
@@ -299,13 +371,22 @@ async fn handle_subscription_deleted(
     expr_attr_names.insert("#status".to_string(), "status".to_string());
     expr_attr_names.insert("#updatedAt".to_string(), "updatedAt".to_string());
 
-    expr_attr_values.insert(":status".to_string(), aws_sdk_dynamodb::types::AttributeValue::S("cancelled".to_string()));
-    expr_attr_values.insert(":updatedAt".to_string(), aws_sdk_dynamodb::types::AttributeValue::S(now));
+    expr_attr_values.insert(
+        ":status".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S("cancelled".to_string()),
+    );
+    expr_attr_values.insert(
+        ":updatedAt".to_string(),
+        aws_sdk_dynamodb::types::AttributeValue::S(now),
+    );
 
     dynamo
         .update_item()
         .table_name(std::env::var("SUBSCRIPTIONS_TABLE")?)
-        .key("userId", aws_sdk_dynamodb::types::AttributeValue::S(user_id.clone()))
+        .key(
+            "userId",
+            aws_sdk_dynamodb::types::AttributeValue::S(user_id.clone()),
+        )
         .update_expression("SET #status = :status, #updatedAt = :updatedAt")
         .set_expression_attribute_names(Some(expr_attr_names))
         .set_expression_attribute_values(Some(expr_attr_values))
@@ -320,7 +401,10 @@ async fn handle_invoice_payment_succeeded(
     _dynamo: &DynamoClient,
     invoice: Invoice,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Processing invoice.payment_succeeded for invoice: {}", invoice.id);
+    info!(
+        "Processing invoice.payment_succeeded for invoice: {}",
+        invoice.id
+    );
     // Could implement payment success logic here (e.g., update payment status, extend access)
     Ok(())
 }
@@ -329,12 +413,18 @@ async fn handle_invoice_payment_failed(
     _dynamo: &DynamoClient,
     invoice: Invoice,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Processing invoice.payment_failed for invoice: {}", invoice.id);
+    info!(
+        "Processing invoice.payment_failed for invoice: {}",
+        invoice.id
+    );
 
     if let Some(subscription_id) = invoice.subscription {
         // Could implement logic to handle failed payments
         // For now, just log the event
-        warn!("Payment failed for subscription: {} (customer: {})", subscription_id, invoice.customer);
+        warn!(
+            "Payment failed for subscription: {} (customer: {})",
+            subscription_id, invoice.customer
+        );
     }
 
     Ok(())
@@ -351,7 +441,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Verify webhook signature
     let webhook_secret = std::env::var("STRIPE_WEBHOOK_SECRET")
         .map_err(|_| "Missing STRIPE_WEBHOOK_SECRET environment variable")?;
-    
+
     let signature_header = event
         .headers()
         .get("stripe-signature")
@@ -371,10 +461,13 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             .map_err(Box::new)?);
     }
 
-    let stripe_event: StripeEvent = serde_json::from_str(body)
-        .map_err(|e| format!("Failed to parse Stripe event: {}", e))?;
+    let stripe_event: StripeEvent =
+        serde_json::from_str(body).map_err(|e| format!("Failed to parse Stripe event: {}", e))?;
 
-    info!("Received Stripe event: {} ({})", stripe_event.event_type, stripe_event.id);
+    info!(
+        "Received Stripe event: {} ({})",
+        stripe_event.event_type, stripe_event.id
+    );
 
     let config = aws_config::load_from_env().await;
     let dynamo = DynamoClient::new(&config);
@@ -422,7 +515,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         }
         Err(e) => {
             error!("Error processing webhook: {}", e);
-            
+
             let body = json!({
                 "status": "error",
                 "error": e.to_string(),

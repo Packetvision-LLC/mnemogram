@@ -4,7 +4,7 @@ use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 mod extract_user_id;
@@ -121,21 +121,34 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Get memories for this user from DynamoDB (single query)
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
-    
+
     let mut expression_attribute_names = HashMap::new();
     expression_attribute_names.insert("#userId".to_string(), "userId".to_string());
     expression_attribute_names.insert("#status".to_string(), "status".to_string());
-    
+
     let mut expression_attribute_values = HashMap::new();
-    expression_attribute_values.insert(":userId".to_string(), AttributeValue::S(user_id.to_string()));
-    expression_attribute_values.insert(":status1".to_string(), AttributeValue::S("ready".to_string()));
-    expression_attribute_values.insert(":status2".to_string(), AttributeValue::S("indexed".to_string()));
+    expression_attribute_values.insert(
+        ":userId".to_string(),
+        AttributeValue::S(user_id.to_string()),
+    );
+    expression_attribute_values.insert(
+        ":status1".to_string(),
+        AttributeValue::S("ready".to_string()),
+    );
+    expression_attribute_values.insert(
+        ":status2".to_string(),
+        AttributeValue::S("indexed".to_string()),
+    );
 
     // If a specific memoryId is provided, filter to that memory only
-    let mut filter_expression = "userId = :userId AND (#status = :status1 OR #status = :status2)".to_string();
+    let mut filter_expression =
+        "userId = :userId AND (#status = :status1 OR #status = :status2)".to_string();
     if let Some(memory_id) = &request_body.memory_id {
         filter_expression.push_str(" AND memoryId = :memoryId");
-        expression_attribute_values.insert(":memoryId".to_string(), AttributeValue::S(memory_id.clone()));
+        expression_attribute_values.insert(
+            ":memoryId".to_string(),
+            AttributeValue::S(memory_id.clone()),
+        );
     }
 
     let scan_result = dynamodb_client
@@ -177,19 +190,19 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
 
                 // TODO: Implement actual search using memvid integration
                 // For now, return placeholder results for each memory
-                let memory_results = search_memory_placeholder(
-                    query,
-                    memory_id,
-                    memory_name,
-                    created_at
-                );
-                
+                let memory_results =
+                    search_memory_placeholder(query, memory_id, memory_name, created_at);
+
                 query_results.extend(memory_results);
             }
         }
 
         // Sort by relevance score (descending) and limit to top 20 per query
-        query_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        query_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         query_results.truncate(20);
 
         batch_results.push(QueryResult {
@@ -226,13 +239,16 @@ fn search_memory_placeholder(
     // 1. Load the memory from S3 using memvid-core (single S3 GET for all queries)
     // 2. Perform semantic search for each query
     // 3. Return ranked results with timestamps
-    
+
     vec![
         RecallResult {
             memory_id: memory_id.to_string(),
             memory_name: memory_name.to_string(),
             timestamp: Some("00:02:15".to_string()),
-            snippet: format!("Relevant content about '{}' found in {}", query, memory_name),
+            snippet: format!(
+                "Relevant content about '{}' found in {}",
+                query, memory_name
+            ),
             score: 0.92,
             created_at: created_at.to_string(),
         },

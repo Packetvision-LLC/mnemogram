@@ -6,12 +6,12 @@ use chrono::{DateTime, Utc};
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use shared::memvid::MemvidClient;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::collections::HashMap;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Deserialize)]
 struct MaintenanceEvent {
@@ -53,9 +53,9 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
 
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
-    
-    let bucket_name = std::env::var("MEMORY_BUCKET")
-        .map_err(|_| "MEMORY_BUCKET environment variable not set")?;
+
+    let bucket_name =
+        std::env::var("MEMORY_BUCKET").map_err(|_| "MEMORY_BUCKET environment variable not set")?;
 
     let memvid_client = MemvidClient::new(s3_client.clone(), bucket_name.clone());
 
@@ -85,7 +85,7 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
 
     loop {
         let items = scan_result.items();
-        
+
         for item in items {
             let memory_id: String = item
                 .get("memoryId")
@@ -106,7 +106,10 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
                             last_vacuumed_utc < seven_days_ago
                         }
                         Err(_) => {
-                            warn!("Invalid lastVacuumedAt timestamp for memory {}: {}", memory_id, last_vacuumed_str);
+                            warn!(
+                                "Invalid lastVacuumedAt timestamp for memory {}: {}",
+                                memory_id, last_vacuumed_str
+                            );
                             true // Vacuum if timestamp is invalid
                         }
                     }
@@ -125,8 +128,13 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
             match process_memory(&memvid_client, &s3_client, &memory_id, &bucket_name).await {
                 Ok(result) => {
                     // Update lastVacuumedAt in DynamoDB
-                    if let Err(e) = update_last_vacuumed(&dynamo_client, &memories_table, &memory_id).await {
-                        warn!("Failed to update lastVacuumed timestamp for {}: {}", memory_id, e);
+                    if let Err(e) =
+                        update_last_vacuumed(&dynamo_client, &memories_table, &memory_id).await
+                    {
+                        warn!(
+                            "Failed to update lastVacuumed timestamp for {}: {}",
+                            memory_id, e
+                        );
                     }
 
                     total_frames_reclaimed += result.frames_reclaimed;
@@ -174,7 +182,7 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
 
     // Log detailed results
     info!("Maintenance completed: processed={}, skipped={}, errors={}, frames_reclaimed={}, space_saved_mb={:.2}, duration_ms={}",
-          processed_count, skipped_count, error_count, total_frames_reclaimed, 
+          processed_count, skipped_count, error_count, total_frames_reclaimed,
           total_space_saved_bytes as f64 / (1024.0 * 1024.0), processing_duration.as_millis());
 
     for result in &results {
@@ -186,8 +194,11 @@ async fn handler(_event: LambdaEvent<MaintenanceEvent>) -> Result<MaintenanceRes
                   result.size_after_bytes as f64 / (1024.0 * 1024.0),
                   result.space_saved_bytes as f64 / (1024.0 * 1024.0));
         } else {
-            error!("Memory {} failed: {}", result.memory_id, 
-                   result.error_message.as_deref().unwrap_or("Unknown error"));
+            error!(
+                "Memory {} failed: {}",
+                result.memory_id,
+                result.error_message.as_deref().unwrap_or("Unknown error")
+            );
         }
     }
 
@@ -208,7 +219,7 @@ async fn process_memory(
     bucket_name: &str,
 ) -> Result<MemoryProcessResult, Box<dyn std::error::Error + Send + Sync>> {
     let process_start = std::time::Instant::now();
-    
+
     let s3_key = format!("memories/{}.mv2", memory_id);
 
     // Download current .mv2 file
@@ -262,7 +273,7 @@ async fn process_memory(
 
     // Re-upload the optimized file to S3
     let optimized_data = std::fs::read(output_temp.path())?;
-    
+
     s3_client
         .put_object()
         .bucket(bucket_name)
@@ -293,7 +304,9 @@ struct MemvidStats {
     frame_count: i64,
 }
 
-fn get_memvid_stats(file_path: &Path) -> Result<MemvidStats, Box<dyn std::error::Error + Send + Sync>> {
+fn get_memvid_stats(
+    file_path: &Path,
+) -> Result<MemvidStats, Box<dyn std::error::Error + Send + Sync>> {
     let memvid_path = if Path::new("/opt/bin/memvid").exists() {
         "/opt/bin/memvid"
     } else {
@@ -313,7 +326,7 @@ fn get_memvid_stats(file_path: &Path) -> Result<MemvidStats, Box<dyn std::error:
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stats: serde_json::Value = serde_json::from_str(&stdout)?;
-    
+
     let frame_count = stats
         .get("frame_count")
         .or_else(|| stats.get("frames"))

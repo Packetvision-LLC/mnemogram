@@ -4,12 +4,12 @@ use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use shared::memvid::MemvidClient;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
-use tracing::{info, warn, error};
-use std::collections::HashMap;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Deserialize)]
 struct EnrichmentEvent {
@@ -21,7 +21,7 @@ struct EnrichmentEvent {
 struct EventRecord {
     #[serde(rename = "eventSource")]
     _event_source: Option<String>,
-    
+
     // For SQS messages
     body: Option<String>,
 }
@@ -65,9 +65,9 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
     let s3_client = S3Client::new(&config);
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
 
-    let bucket_name = std::env::var("MEMORY_BUCKET")
-        .map_err(|_| "MEMORY_BUCKET environment variable not set")?;
-    
+    let bucket_name =
+        std::env::var("MEMORY_BUCKET").map_err(|_| "MEMORY_BUCKET environment variable not set")?;
+
     let _subscriptions_table = std::env::var("SUBSCRIPTIONS_TABLE")
         .map_err(|_| "SUBSCRIPTIONS_TABLE environment variable not set")?;
 
@@ -84,13 +84,20 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
     // Process each record in the event
     for record in event.payload.records {
         let enrichment_requests = extract_enrichment_requests_from_record(&record)?;
-        
+
         for sqs_msg in enrichment_requests {
             let req = EnrichmentRequest::from(sqs_msg);
             info!("Processing memory {} for enrichment", req.memory_id);
 
             // Update enrichment status to 'processing'
-            if let Err(e) = update_memory_status(&dynamodb_client, &memories_table, &req.memory_id, "processing").await {
+            if let Err(e) = update_memory_status(
+                &dynamodb_client,
+                &memories_table,
+                &req.memory_id,
+                "processing",
+            )
+            .await
+            {
                 warn!("Failed to update memory status to processing: {}", e);
             }
 
@@ -100,18 +107,25 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
                 Ok(result) => {
                     success_count += 1;
                     results.push(result);
-                    
+
                     // Update enrichment status to 'complete'
-                    if let Err(e) = update_memory_status(&dynamodb_client, &memories_table, &req.memory_id, "complete").await {
+                    if let Err(e) = update_memory_status(
+                        &dynamodb_client,
+                        &memories_table,
+                        &req.memory_id,
+                        "complete",
+                    )
+                    .await
+                    {
                         warn!("Failed to update memory status to complete: {}", e);
                     }
-                    
+
                     info!("Successfully enriched memory {}", req.memory_id);
                 }
                 Err(e) => {
                     error!("Failed to enrich memory {}: {}", req.memory_id, e);
                     error_count += 1;
-                    
+
                     results.push(MemoryEnrichmentResult {
                         memory_id: req.memory_id.clone(),
                         success: false,
@@ -123,9 +137,16 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
                         facts_extracted: None,
                         error_message: Some(e.to_string()),
                     });
-                    
+
                     // Update enrichment status to 'failed'
-                    if let Err(e) = update_memory_status(&dynamodb_client, &memories_table, &req.memory_id, "failed").await {
+                    if let Err(e) = update_memory_status(
+                        &dynamodb_client,
+                        &memories_table,
+                        &req.memory_id,
+                        "failed",
+                    )
+                    .await
+                    {
                         warn!("Failed to update memory status to failed: {}", e);
                     }
                 }
@@ -136,8 +157,13 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
     let processing_duration = start_time.elapsed();
     let processed_count = results.len() as i32;
 
-    info!("Enrichment completed: processed={}, success={}, errors={}, duration_ms={}",
-          processed_count, success_count, error_count, processing_duration.as_millis());
+    info!(
+        "Enrichment completed: processed={}, success={}, errors={}, duration_ms={}",
+        processed_count,
+        success_count,
+        error_count,
+        processing_duration.as_millis()
+    );
 
     Ok(EnrichmentResult {
         processed_count,
@@ -148,7 +174,9 @@ async fn handler(event: LambdaEvent<EnrichmentEvent>) -> Result<EnrichmentResult
     })
 }
 
-fn extract_enrichment_requests_from_record(record: &EventRecord) -> Result<Vec<SqsMessageBody>, Error> {
+fn extract_enrichment_requests_from_record(
+    record: &EventRecord,
+) -> Result<Vec<SqsMessageBody>, Error> {
     let mut requests = Vec::new();
 
     // Check if it's an SQS message
@@ -163,12 +191,15 @@ fn extract_enrichment_requests_from_record(record: &EventRecord) -> Result<Vec<S
                 if let Ok(simple_message) = serde_json::from_str::<serde_json::Value>(body) {
                     if let (Some(memory_id), Some(user_id)) = (
                         simple_message.get("memoryId").and_then(|v| v.as_str()),
-                        simple_message.get("userId").and_then(|v| v.as_str())
+                        simple_message.get("userId").and_then(|v| v.as_str()),
                     ) {
                         requests.push(SqsMessageBody {
                             memory_id: memory_id.to_string(),
                             user_id: user_id.to_string(),
-                            subscription_tier: simple_message.get("subscriptionTier").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            subscription_tier: simple_message
+                                .get("subscriptionTier")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
                         });
                     }
                 }
@@ -187,8 +218,12 @@ async fn update_memory_status(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let update_expression = "SET enrichmentStatus = :status, enrichmentLastUpdated = :timestamp";
     let mut expression_attribute_values = HashMap::new();
-    expression_attribute_values.insert(":status".to_string(), AttributeValue::S(status.to_string()));
-    expression_attribute_values.insert(":timestamp".to_string(), AttributeValue::N(chrono::Utc::now().timestamp().to_string()));
+    expression_attribute_values
+        .insert(":status".to_string(), AttributeValue::S(status.to_string()));
+    expression_attribute_values.insert(
+        ":timestamp".to_string(),
+        AttributeValue::N(chrono::Utc::now().timestamp().to_string()),
+    );
 
     dynamodb_client
         .update_item()
@@ -252,9 +287,9 @@ async fn enrich_memory(
     );
 
     let engine = if is_premium {
-        "claude"  // Use Claude API for pro/enterprise users
+        "claude" // Use Claude API for pro/enterprise users
     } else {
-        "rules"   // Use free rules-based engine
+        "rules" // Use free rules-based engine
     };
 
     let process_start = std::time::Instant::now();
@@ -299,7 +334,7 @@ async fn enrich_memory(
 
     // Re-upload the enriched file to S3
     let enriched_data = std::fs::read(output_temp.path())?;
-    
+
     s3_client
         .put_object()
         .bucket(bucket_name)
@@ -307,15 +342,24 @@ async fn enrich_memory(
         .body(enriched_data.into())
         .content_type("application/octet-stream")
         .metadata("enrichment-engine", engine)
-        .metadata("enrichment-timestamp", &chrono::Utc::now().timestamp().to_string())
+        .metadata(
+            "enrichment-timestamp",
+            &chrono::Utc::now().timestamp().to_string(),
+        )
         .send()
         .await?;
 
     let processing_time = process_start.elapsed();
 
-    info!("Memory {} enriched with {} engine: {} bytes → {} bytes, {} cards, {} facts", 
-          request.memory_id, engine, original_size, final_size, 
-          cards_extracted.unwrap_or(0), facts_extracted.unwrap_or(0));
+    info!(
+        "Memory {} enriched with {} engine: {} bytes → {} bytes, {} cards, {} facts",
+        request.memory_id,
+        engine,
+        original_size,
+        final_size,
+        cards_extracted.unwrap_or(0),
+        facts_extracted.unwrap_or(0)
+    );
 
     Ok(MemoryEnrichmentResult {
         memory_id: request.memory_id.clone(),
@@ -337,7 +381,7 @@ fn extract_stat_from_output(output: &str, stat_name: &str) -> Option<i32> {
         format!("Found {} {}", r"\d+", stat_name),
         format!("{}: {}", stat_name, r"\d+"),
     ];
-    
+
     for pattern in &patterns {
         if let Some(captures) = regex::Regex::new(pattern).ok()?.captures(output) {
             if let Some(num_str) = captures.get(0) {
@@ -347,7 +391,7 @@ fn extract_stat_from_output(output: &str, stat_name: &str) -> Option<i32> {
             }
         }
     }
-    
+
     None
 }
 
