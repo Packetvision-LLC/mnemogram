@@ -105,15 +105,24 @@ cargo lambda watch -f api-status
 cargo lambda invoke api-status --data-ascii '{"httpMethod":"GET","path":"/status"}'
 ```
 
-## API Endpoints
+## API Documentation
 
-| Method | Path | Lambda | Auth | Description |
-|--------|------|--------|------|-------------|
-| `GET` | `/status` | api-status | None | Health check |
-| `PUT` | `/memories` | api-ingest | JWT | Ingest content into .mv2 |
-| `GET` | `/memories` | api-manage | JWT | List memory files |
-| `DELETE` | `/memories` | api-manage | JWT | Delete memory files |
-| `GET` | `/search` | api-search | JWT | Hybrid search over memories |
+📚 **[Complete API Documentation](docs/README.md)** - Interactive documentation with examples, schemas, and testing interface
+
+### Quick Reference
+
+| Method | Path | Description | Auth | Tier |
+|--------|------|-------------|------|------|
+| `GET` | `/status` | Health check & version | None | All |
+| `PUT` | `/memories` | Upload .mv2 memory files | JWT | All |
+| `GET` | `/search` | Semantic search within memories | JWT | All |
+| `GET` | `/v1/memories/{id}/cards` | AI-extracted memory cards | JWT | Pro+ |
+| `GET` | `/v1/memories/{id}/facts` | Structured fact extraction | JWT | Pro+ |
+| `GET` | `/v1/memories/{id}/state/{entity}` | O(1) entity state lookup | JWT | Pro+ |
+
+**Documentation Files:**
+- **OpenAPI Spec**: [`docs/openapi.yaml`](docs/openapi.yaml) - Complete API specification
+- **Interactive Docs**: [`docs/api-docs.html`](docs/api-docs.html) - Swagger UI interface
 
 ## CI/CD
 

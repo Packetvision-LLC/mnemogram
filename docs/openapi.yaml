@@ -1,1104 +1,249 @@
 openapi: 3.0.3
 info:
   title: Mnemogram API
-  description: API for ingesting, managing, and searching memory files (.mv2 format)
+  description: |
+    Mnemogram is a serverless AI memory service that enables semantic search and analysis of personal knowledge.
+    
+    ## Features
+    - **Memory Ingestion**: Upload and store .mv2 memory files
+    - **Semantic Search**: Query your memories using natural language
+    - **AI Enrichment**: Extract cards, facts, and structured data from memories
+    - **Entity State Tracking**: O(1) lookups for entity states across memories
+    
+    ## Authentication
+    All endpoints (except /status) require authentication via Bearer token in the Authorization header.
+    
+    ## Tiers
+    - **Free**: Basic memory storage and search
+    - **Pro**: Advanced features like cards and facts extraction  
+    - **Enterprise**: High-volume usage and priority support
   version: 1.0.0
   contact:
-    name: Mnemogram Team
-    url: https://mnemogram.ai
+    name: Mnemogram Support
+    url: https://mnemogram.ai/support
     email: support@mnemogram.ai
   license:
-    name: MIT
-    url: https://opensource.org/licenses/MIT
+    name: Proprietary
+    url: https://mnemogram.ai/terms
 
 servers:
-  - url: https://api.mnemogram.ai/v1
-    description: Production server
-  - url: https://staging-api.mnemogram.ai/v1
-    description: Staging server
-
-components:
-  securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Bearer token for API authentication
-
-  schemas:
-    Memory:
-      type: object
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: Unique identifier for the memory
-        userId:
-          type: string
-          description: ID of the user who owns this memory
-        filename:
-          type: string
-          description: Original filename of the uploaded .mv2 file
-        title:
-          type: string
-          description: Human-readable title for the memory
-        description:
-          type: string
-          description: Optional description of the memory content
-        fileSize:
-          type: integer
-          format: int64
-          description: Size of the .mv2 file in bytes
-        contentHash:
-          type: string
-          description: SHA256 hash of the file content for integrity
-        createdAt:
-          type: string
-          format: date-time
-          description: When the memory was created
-        updatedAt:
-          type: string
-          format: date-time
-          description: When the memory was last updated
-        status:
-          type: string
-          enum: [processing, ready, error]
-          description: Processing status of the memory
-        metadata:
-          type: object
-          additionalProperties: true
-          description: Additional metadata extracted from the .mv2 file
-      required:
-        - id
-        - userId
-        - filename
-        - fileSize
-        - createdAt
-        - status
-
-    MemoryList:
-      type: object
-      properties:
-        memories:
-          type: array
-          items:
-            $ref: '#/components/schemas/Memory'
-        total:
-          type: integer
-          description: Total number of memories for the user
-        limit:
-          type: integer
-          description: Number of results per page
-        offset:
-          type: integer
-          description: Offset for pagination
-      required:
-        - memories
-        - total
-
-    SearchRequest:
-      type: object
-      properties:
-        query:
-          type: string
-          description: Search query string
-        limit:
-          type: integer
-          minimum: 1
-          maximum: 100
-          default: 10
-          description: Maximum number of results to return
-        threshold:
-          type: number
-          format: float
-          minimum: 0.0
-          maximum: 1.0
-          default: 0.7
-          description: Similarity threshold for semantic search
-        filters:
-          type: object
-          additionalProperties: true
-          description: Additional filters to apply to search
-      required:
-        - query
-
-    SearchResult:
-      type: object
-      properties:
-        content:
-          type: string
-          description: Relevant content excerpt from the memory
-        score:
-          type: number
-          format: float
-          description: Similarity score (0.0 to 1.0)
-        offset:
-          type: integer
-          description: Character offset within the original file
-        context:
-          type: string
-          description: Additional context around the match
-        metadata:
-          type: object
-          additionalProperties: true
-          description: Additional metadata about this result
-      required:
-        - content
-        - score
-
-    RecallResult:
-      type: object
-      properties:
-        memoryId:
-          type: string
-          description: Unique identifier for the memory
-        memoryName:
-          type: string
-          description: Human-readable name of the memory
-        timestamp:
-          type: string
-          nullable: true
-          description: Timestamp within the memory (e.g., "00:02:15")
-        snippet:
-          type: string
-          description: Relevant content excerpt from the memory
-        score:
-          type: number
-          format: float
-          description: Similarity score (0.0 to 1.0)
-        createdAt:
-          type: string
-          format: date-time
-          description: When the memory was created
-      required:
-        - memoryId
-        - memoryName
-        - snippet
-        - score
-        - createdAt
-
-    RecallRequest:
-      type: object
-      properties:
-        query:
-          type: string
-          description: Search query string
-        memoryId:
-          type: string
-          nullable: true
-          description: Optional memory ID to search within (if not provided, searches all memories)
-      required:
-        - query
-
-    RecallResponse:
-      type: object
-      properties:
-        query:
-          type: string
-          description: The original search query
-        results:
-          type: array
-          items:
-            $ref: '#/components/schemas/RecallResult'
-        total:
-          type: integer
-          description: Total number of results found
-      required:
-        - query
-        - results
-        - total
-
-    BatchRecallRequest:
-      type: object
-      properties:
-        queries:
-          type: array
-          items:
-            type: string
-          minItems: 1
-          maxItems: 10
-          description: Array of search query strings (max 10)
-        memoryId:
-          type: string
-          nullable: true
-          description: Optional memory ID to search within (if not provided, searches all memories)
-      required:
-        - queries
-
-    BatchRecallQueryResult:
-      type: object
-      properties:
-        query:
-          type: string
-          description: The search query
-        matches:
-          type: array
-          items:
-            $ref: '#/components/schemas/RecallResult'
-          description: Matching results for this query
-      required:
-        - query
-        - matches
-
-    BatchRecallResponse:
-      type: object
-      properties:
-        results:
-          type: array
-          items:
-            $ref: '#/components/schemas/BatchRecallQueryResult'
-          description: Results for each query in the batch
-      required:
-        - results
-
-    ApiKey:
-      type: object
-      properties:
-        keyId:
-          type: string
-          format: uuid
-          description: Unique identifier for the API key
-        name:
-          type: string
-          description: Human-readable name for the API key
-        prefix:
-          type: string
-          description: First few characters of the API key for identification
-        createdAt:
-          type: string
-          format: date-time
-          description: When the API key was created
-        lastUsedAt:
-          type: string
-          format: date-time
-          nullable: true
-          description: When the API key was last used
-        status:
-          type: string
-          enum: [active, revoked]
-          description: Current status of the API key
-        permissions:
-          type: array
-          items:
-            type: string
-          description: List of permissions granted to this API key
-      required:
-        - keyId
-        - name
-        - prefix
-        - createdAt
-        - status
-
-    ApiKeyRequest:
-      type: object
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 100
-          description: Human-readable name for the API key
-        permissions:
-          type: array
-          items:
-            type: string
-          description: List of permissions to grant to this API key
-          default: ["read", "write"]
-      required:
-        - name
-
-    ApiKeyResponse:
-      type: object
-      properties:
-        keyId:
-          type: string
-          format: uuid
-          description: Unique identifier for the API key
-        name:
-          type: string
-          description: Human-readable name for the API key
-        key:
-          type: string
-          description: The actual API key (only returned on creation)
-        createdAt:
-          type: string
-          format: date-time
-          description: When the API key was created
-        permissions:
-          type: array
-          items:
-            type: string
-          description: List of permissions granted to this API key
-      required:
-        - keyId
-        - name
-        - key
-        - createdAt
-        - permissions
-
-    UsageStats:
-      type: object
-      properties:
-        userId:
-          type: string
-          description: User ID
-        period:
-          type: object
-          properties:
-            start:
-              type: string
-              format: date
-              description: Start date of the usage period
-            end:
-              type: string
-              format: date
-              description: End date of the usage period
-        apiCalls:
-          type: integer
-          description: Total number of API calls made
-        storageBytes:
-          type: integer
-          format: int64
-          description: Total storage used in bytes
-        searchQueries:
-          type: integer
-          description: Total number of search queries performed
-        breakdown:
-          type: object
-          properties:
-            memories:
-              type: object
-              properties:
-                created:
-                  type: integer
-                  description: Number of memories created
-                retrieved:
-                  type: integer
-                  description: Number of memory retrievals
-                deleted:
-                  type: integer
-                  description: Number of memories deleted
-            searches:
-              type: object
-              properties:
-                total:
-                  type: integer
-                  description: Total search queries
-                semantic:
-                  type: integer
-                  description: Semantic search queries
-                keyword:
-                  type: integer
-                  description: Keyword search queries
-      required:
-        - userId
-        - period
-        - apiCalls
-        - storageBytes
-        - searchQueries
-
-    HealthStatus:
-      type: object
-      properties:
-        status:
-          type: string
-          enum: [healthy, degraded, unhealthy]
-          description: Overall system health status
-        timestamp:
-          type: string
-          format: date-time
-          description: When the health check was performed
-        version:
-          type: string
-          description: API version
-        services:
-          type: object
-          properties:
-            database:
-              type: string
-              enum: [healthy, unhealthy]
-              description: Database connectivity status
-            storage:
-              type: string
-              enum: [healthy, unhealthy]
-              description: S3 storage status
-            search:
-              type: string
-              enum: [healthy, unhealthy]
-              description: Search service status
-        uptime:
-          type: integer
-          description: Service uptime in seconds
-      required:
-        - status
-        - timestamp
-        - version
-
-    Error:
-      type: object
-      properties:
-        error:
-          type: string
-          description: Error type or code
-        message:
-          type: string
-          description: Human-readable error message
-        details:
-          type: object
-          additionalProperties: true
-          description: Additional error details
-        requestId:
-          type: string
-          description: Request ID for debugging
-      required:
-        - error
-        - message
-
-    MemoryCard:
-      type: object
-      properties:
-        id:
-          type: string
-          description: Unique identifier for this memory card
-        title:
-          type: string
-          description: Title or subject of the memory card
-        content:
-          type: string
-          description: Main content of the memory card
-        timestamp:
-          type: string
-          nullable: true
-          description: Timestamp within the memory (e.g., "00:02:15")
-        tags:
-          type: array
-          items:
-            type: string
-          description: Tags associated with this memory card
-        entities:
-          type: array
-          items:
-            type: string
-          description: Named entities mentioned in this card
-        confidence:
-          type: number
-          format: float
-          minimum: 0.0
-          maximum: 1.0
-          description: Confidence score for this extraction
-      required:
-        - id
-        - title
-        - content
-
-    MemoryCardsResponse:
-      type: object
-      properties:
-        memory_id:
-          type: string
-          description: ID of the memory
-        cards:
-          type: array
-          items:
-            $ref: '#/components/schemas/MemoryCard'
-          description: Extracted memory cards
-        count:
-          type: integer
-          description: Number of memory cards extracted
-      required:
-        - memory_id
-        - cards
-        - count
-
-    MemoryFact:
-      type: object
-      properties:
-        id:
-          type: string
-          description: Unique identifier for this fact
-        type:
-          type: string
-          description: Type of fact (person, place, event, concept, etc.)
-        subject:
-          type: string
-          description: Subject of the fact
-        predicate:
-          type: string
-          description: Predicate or relationship
-        object:
-          type: string
-          description: Object or value
-        confidence:
-          type: number
-          format: float
-          minimum: 0.0
-          maximum: 1.0
-          description: Confidence score for this fact extraction
-        sources:
-          type: array
-          items:
-            type: string
-          description: Source references within the memory
-        timestamp:
-          type: string
-          nullable: true
-          description: When this fact occurred or was mentioned
-      required:
-        - id
-        - type
-        - subject
-        - predicate
-        - object
-
-    MemoryFactsResponse:
-      type: object
-      properties:
-        memory_id:
-          type: string
-          description: ID of the memory
-        facts:
-          type: array
-          items:
-            $ref: '#/components/schemas/MemoryFact'
-          description: Extracted structured facts
-        count:
-          type: integer
-          description: Number of facts extracted
-      required:
-        - memory_id
-        - facts
-        - count
-
-    EntityState:
-      type: object
-      properties:
-        entity:
-          type: string
-          description: Name of the entity
-        type:
-          type: string
-          description: Type of entity (person, place, concept, etc.)
-        attributes:
-          type: object
-          additionalProperties: true
-          description: Current attributes and their values
-        relationships:
-          type: array
-          items:
-            type: object
-            properties:
-              type:
-                type: string
-                description: Type of relationship
-              target:
-                type: string
-                description: Target entity or value
-              strength:
-                type: number
-                format: float
-                description: Strength of the relationship
-          description: Relationships to other entities
-        first_mentioned:
-          type: string
-          nullable: true
-          description: Timestamp when first mentioned
-        last_updated:
-          type: string
-          nullable: true
-          description: Timestamp when last updated
-      required:
-        - entity
-        - type
-        - attributes
-
-    EntityStateResponse:
-      type: object
-      properties:
-        memory_id:
-          type: string
-          description: ID of the memory
-        entity:
-          type: string
-          description: Name of the entity
-        state:
-          $ref: '#/components/schemas/EntityState'
-      required:
-        - memory_id
-        - entity
-        - state
-
-    Subscription:
-      type: object
-      properties:
-        userId:
-          type: string
-          description: User identifier
-        planId:
-          type: string
-          description: Current subscription plan identifier
-        planName:
-          type: string
-          description: Human-readable plan name
-        billingPeriod:
-          type: string
-          enum: [monthly, annual]
-          description: Billing period for the subscription
-        status:
-          type: string
-          enum: [active, cancelled, past_due, unpaid]
-          description: Current subscription status
-        currentPeriodEnd:
-          type: string
-          format: date-time
-          description: End date of the current billing period
-        nextRenewalDate:
-          type: string
-          format: date-time
-          description: Next renewal date
-        stripeCustomerId:
-          type: string
-          description: Stripe customer identifier
-        stripeSubscriptionId:
-          type: string
-          description: Stripe subscription identifier
-        promoCode:
-          type: string
-          nullable: true
-          description: Applied promo code, if any
-        createdAt:
-          type: string
-          format: date-time
-          description: When the subscription was created
-        updatedAt:
-          type: string
-          format: date-time
-          description: When the subscription was last updated
-      required:
-        - userId
-        - planId
-        - planName
-        - billingPeriod
-        - status
-        - currentPeriodEnd
-        - createdAt
-        - updatedAt
-
-    CheckoutRequest:
-      type: object
-      properties:
-        priceId:
-          type: string
-          description: Stripe price identifier for the desired plan
-        billingPeriod:
-          type: string
-          enum: [monthly, annual]
-          description: Billing period for the subscription
-          default: monthly
-        promoCode:
-          type: string
-          nullable: true
-          description: Optional promo code to apply
-        successUrl:
-          type: string
-          nullable: true
-          description: URL to redirect to after successful payment
-        cancelUrl:
-          type: string
-          nullable: true
-          description: URL to redirect to if payment is cancelled
-      required:
-        - priceId
-
-    CheckoutResponse:
-      type: object
-      properties:
-        sessionId:
-          type: string
-          description: Stripe checkout session identifier
-        url:
-          type: string
-          description: URL to redirect user to complete payment
-      required:
-        - sessionId
-        - url
-
-    PortalResponse:
-      type: object
-      properties:
-        url:
-          type: string
-          description: URL to redirect user to Stripe customer portal
-      required:
-        - url
-
-security:
-  - BearerAuth: []
+  - url: https://api.mnemogram.ai
+    description: Production API
+  - url: https://api-dev.mnemogram.ai
+    description: Development API
 
 paths:
-  /v1/health:
+  /status:
     get:
-      summary: Health check
-      description: Check the health status of the API and its dependencies
-      operationId: getHealth
+      summary: Health Check
+      description: Returns service status, version, and health information
+      operationId: getStatus
       tags:
-        - System
-      security: []
+        - Health
       responses:
         '200':
-          description: Health status information
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
+          description: Service is healthy
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthStatus'
-        '503':
-          description: Service unavailable
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  service:
+                    type: string
+                    example: "mnemogram"
+                  version:
+                    type: string
+                    example: "1.0.0"
 
-  /v1/memories:
-    post:
-      summary: Ingest memory file
-      description: Upload and ingest a .mv2 memory file
-      operationId: ingestMemory
+  /memories:
+    put:
+      summary: Upload Memory File
+      description: |
+        Upload a .mv2 memory file for processing and storage. Supports both direct upload (for files < 50MB) 
+        and pre-signed URL flow (for larger files up to 100MB).
+        
+        **Direct Upload**: Send the file data in the request body
+        **Pre-signed Upload**: Set `x-upload-mode: presigned` header to get an upload URL
+      operationId: uploadMemory
       tags:
-        - Memories
+        - Memory Ingestion
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: x-upload-mode
+          in: header
+          description: Upload mode - 'direct' for immediate upload, 'presigned' for large files
+          schema:
+            type: string
+            enum: [direct, presigned]
+            default: direct
       requestBody:
-        required: true
+        description: Memory file data (for direct uploads)
         content:
-          multipart/form-data:
+          application/octet-stream:
             schema:
-              type: object
-              properties:
-                file:
-                  type: string
-                  format: binary
-                  description: The .mv2 memory file to upload
-                title:
-                  type: string
-                  description: Optional title for the memory
-                description:
-                  type: string
-                  description: Optional description for the memory
-                metadata:
-                  type: string
-                  description: Optional JSON metadata
-              required:
-                - file
+              type: string
+              format: binary
+          application/mv2:
+            schema:
+              type: string
+              format: binary
       responses:
         '201':
-          description: Memory successfully ingested
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
+          description: Memory uploaded successfully or pre-signed URL generated
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Memory'
+                type: object
+                properties:
+                  memoryId:
+                    type: string
+                    format: uuid
+                    example: "550e8400-e29b-41d4-a716-446655440000"
+                  userId:
+                    type: string
+                    example: "user123"
+                  s3Key:
+                    type: string
+                    example: "user123/550e8400-e29b-41d4-a716-446655440000.mv2"
+                  fileSize:
+                    type: integer
+                    example: 1024576
+                  createdAt:
+                    type: string
+                    format: date-time
+                    example: "2026-02-17T03:22:00Z"
+                  status:
+                    type: string
+                    enum: [processing, pending_upload]
+                    example: "processing"
+                  message:
+                    type: string
+                    example: "Memory file uploaded successfully and is being processed."
+                  uploadUrl:
+                    type: string
+                    format: uri
+                    description: Pre-signed upload URL (only present when x-upload-mode: presigned)
+                    example: "https://s3.amazonaws.com/bucket/key?signature=..."
+                  instructions:
+                    type: string
+                    description: Instructions for pre-signed upload (only present when x-upload-mode: presigned)
+                    example: "Make a PUT request to uploadUrl with your .mv2 file as the request body."
         '400':
-          description: Invalid request or file format
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '413':
           description: File too large
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '429':
-          description: Rate limit exceeded
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "file_too_large"
+                  message:
+                    type: string
+                    example: "File size exceeds 100MB limit"
+                  maxSize:
+                    type: string
+                    example: "100MB"
 
+  /search:
     get:
-      summary: List user's memories
-      description: Retrieve a list of all memories belonging to the authenticated user
-      operationId: listMemories
+      summary: Search Memories
+      description: Perform semantic search within a specific memory file using natural language queries
+      operationId: searchMemories
       tags:
-        - Memories
+        - Search
+      security:
+        - bearerAuth: []
       parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query text
+          schema:
+            type: string
+            example: "artificial intelligence trends"
+        - name: memoryId
+          in: query
+          required: true
+          description: ID of the memory file to search within
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
         - name: limit
           in: query
-          description: Number of results per page
+          required: false
+          description: Maximum number of results to return (max 100)
           schema:
             type: integer
             minimum: 1
             maximum: 100
             default: 20
-        - name: offset
-          in: query
-          description: Offset for pagination
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-        - name: sort
-          in: query
-          description: Sort order
-          schema:
-            type: string
-            enum: [created_asc, created_desc, updated_asc, updated_desc, name_asc, name_desc]
-            default: created_desc
-        - name: status
-          in: query
-          description: Filter by status
-          schema:
-            type: string
-            enum: [processing, ready, error]
-      responses:
-        '200':
-          description: List of memories
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MemoryList'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /v1/memories/{id}:
-    get:
-      summary: Get memory details
-      description: Retrieve detailed information about a specific memory
-      operationId: getMemory
-      tags:
-        - Memories
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: Memory ID
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '200':
-          description: Memory details
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Memory'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Memory not found
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    delete:
-      summary: Delete memory
-      description: Permanently delete a memory and its associated data
-      operationId: deleteMemory
-      tags:
-        - Memories
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: Memory ID
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '204':
-          description: Memory successfully deleted
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Memory not found
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /v1/memories/{id}/search:
-    post:
-      summary: Search within memory
-      description: Perform semantic search within a specific memory file
-      operationId: searchMemory
-      tags:
-        - Search
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: Memory ID to search within
-          schema:
-            type: string
-            format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SearchRequest'
+            example: 10
       responses:
         '200':
           description: Search results
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchResponse'
+                type: object
+                properties:
+                  query:
+                    type: string
+                    example: "artificial intelligence trends"
+                  memoryId:
+                    type: string
+                    format: uuid
+                    example: "550e8400-e29b-41d4-a716-446655440000"
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        text:
+                          type: string
+                          example: "AI is transforming industries through automation"
+                        score:
+                          type: number
+                          format: float
+                          example: 0.85
+                        metadata:
+                          type: object
+                          additionalProperties: true
+                  executionTimeMs:
+                    type: integer
+                    example: 125
+                  totalResults:
+                    type: integer
+                    example: 42
         '400':
-          description: Invalid search request
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '404':
-          description: Memory not found
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
 
   /v1/memories/{id}/cards:
     get:
-      summary: Get memory cards
-      description: Extract structured memory cards from an enriched memory (Pro/Enterprise only)
+      summary: Get Memory Cards
+      description: |
+        Retrieve AI-extracted memory cards from an enriched memory file.
+        Cards are key insights and summaries extracted by the enrichment process.
+        
+        **Tier Requirements**: Pro or Enterprise
       operationId: getMemoryCards
       tags:
-        - Enrichment
+        - AI Features
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -1107,75 +252,68 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
       responses:
         '200':
-          description: Memory cards extracted from the enriched memory
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
+          description: Memory cards retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MemoryCardsResponse'
+                type: object
+                properties:
+                  memoryId:
+                    type: string
+                    format: uuid
+                    example: "550e8400-e29b-41d4-a716-446655440000"
+                  cards:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                          example: "Key Insight"
+                        content:
+                          type: string
+                          example: "Summary of important information"
+                        tags:
+                          type: array
+                          items:
+                            type: string
+                          example: ["AI", "technology"]
+                        confidence:
+                          type: number
+                          format: float
+                          example: 0.92
+                  total:
+                    type: integer
+                    example: 15
+                  extractedAt:
+                    type: string
+                    format: date-time
+                    example: "2026-02-17T03:22:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Premium subscription required
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/TierRequired'
         '404':
-          description: Memory not found
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Memory not enriched
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
 
   /v1/memories/{id}/facts:
     get:
-      summary: Get memory facts
-      description: Extract structured facts from an enriched memory (Pro/Enterprise only)
+      summary: Get Extracted Facts
+      description: |
+        Retrieve structured facts extracted from an enriched memory file.
+        Facts are specific data points and relationships identified by AI analysis.
+        
+        **Tier Requirements**: Pro or Enterprise
       operationId: getMemoryFacts
       tags:
-        - Enrichment
+        - AI Features
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -1184,75 +322,69 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
       responses:
         '200':
-          description: Structured facts extracted from the enriched memory
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
+          description: Facts retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MemoryFactsResponse'
+                type: object
+                properties:
+                  memoryId:
+                    type: string
+                    format: uuid
+                    example: "550e8400-e29b-41d4-a716-446655440000"
+                  facts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        subject:
+                          type: string
+                          example: "OpenAI"
+                        predicate:
+                          type: string
+                          example: "released"
+                        object:
+                          type: string
+                          example: "GPT-4"
+                        confidence:
+                          type: number
+                          format: float
+                          example: 0.95
+                        source:
+                          type: string
+                          example: "Document section 3.1"
+                  total:
+                    type: integer
+                    example: 28
+                  extractedAt:
+                    type: string
+                    format: date-time
+                    example: "2026-02-17T03:22:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Premium subscription required
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/TierRequired'
         '404':
-          description: Memory not found
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Memory not enriched
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
 
   /v1/memories/{id}/state/{entity}:
     get:
-      summary: Get entity state
-      description: O(1) lookup of entity state from an enriched memory (Pro/Enterprise only)
+      summary: Get Entity State
+      description: |
+        Perform O(1) entity state lookup across enriched memories.
+        Retrieves the current state and attributes of a specific entity.
+        
+        **Tier Requirements**: Pro or Enterprise
       operationId: getEntityState
       tags:
-        - Enrichment
+        - AI Features
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -1261,549 +393,156 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
         - name: entity
           in: path
           required: true
           description: Entity name to lookup
           schema:
             type: string
+            example: "OpenAI"
       responses:
         '200':
-          description: Entity state information
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EntityStateResponse'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '403':
-          description: Premium subscription required
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          description: Memory or entity not found
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '409':
-          description: Memory not enriched
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /v1/api-keys:
-    post:
-      summary: Generate API key
-      description: Create a new API key for programmatic access
-      operationId: createApiKey
-      tags:
-        - API Keys
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ApiKeyRequest'
-      responses:
-        '201':
-          description: API key created successfully
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiKeyResponse'
-        '400':
-          description: Invalid request
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-    get:
-      summary: List API keys
-      description: Retrieve a list of all API keys for the authenticated user
-      operationId: listApiKeys
-      tags:
-        - API Keys
-      parameters:
-        - name: status
-          in: query
-          description: Filter by status
-          schema:
-            type: string
-            enum: [active, revoked]
-      responses:
-        '200':
-          description: List of API keys
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
+          description: Entity state retrieved successfully
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  apiKeys:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ApiKey'
-                  total:
-                    type: integer
-                    description: Total number of API keys
-                required:
-                  - apiKeys
-                  - total
+                  memoryId:
+                    type: string
+                    format: uuid
+                    example: "550e8400-e29b-41d4-a716-446655440000"
+                  entity:
+                    type: string
+                    example: "OpenAI"
+                  state:
+                    type: object
+                    properties:
+                      attributes:
+                        type: object
+                        additionalProperties: true
+                        example:
+                          type: "company"
+                          industry: "AI"
+                          founded: "2015"
+                      relationships:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            relation:
+                              type: string
+                            target:
+                              type: string
+                        example:
+                          - relation: "created"
+                            target: "GPT-4"
+                      lastUpdated:
+                        type: string
+                        format: date-time
+                        example: "2026-02-17T03:22:00Z"
+                  confidence:
+                    type: number
+                    format: float
+                    example: 0.88
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /v1/api-keys/{id}:
-    delete:
-      summary: Revoke API key
-      description: Revoke (disable) an API key
-      operationId: revokeApiKey
-      tags:
-        - API Keys
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: API key ID
-          schema:
-            type: string
-            format: uuid
-      responses:
-        '204':
-          description: API key successfully revoked
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TierRequired'
         '404':
-          description: API key not found
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
 
-  /v1/usage:
-    get:
-      summary: Get usage statistics
-      description: Retrieve usage statistics for the authenticated user
-      operationId: getUsageStats
-      tags:
-        - Usage
-      parameters:
-        - name: start_date
-          in: query
-          description: Start date for usage period (YYYY-MM-DD)
-          schema:
-            type: string
-            format: date
-        - name: end_date
-          in: query
-          description: End date for usage period (YYYY-MM-DD)
-          schema:
-            type: string
-            format: date
-        - name: granularity
-          in: query
-          description: Granularity of usage data
-          schema:
-            type: string
-            enum: [daily, weekly, monthly]
-            default: daily
-      responses:
-        '200':
-          description: Usage statistics
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UsageStats'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from authentication endpoint
 
-  /v1/recall:
-    post:
-      summary: Recall across memories
-      description: Search for content across all user memories or within a specific memory
-      operationId: recallMemories
-      tags:
-        - Recall
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RecallRequest'
-      responses:
-        '200':
-          description: Recall results
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
+  responses:
+    BadRequest:
+      description: Bad request - invalid parameters or missing required fields
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
                 type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RecallResponse'
-        '400':
-          description: Invalid request
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
+                example: "bad_request"
+              message:
                 type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                example: "Invalid request parameters"
 
-  /v1/batch-recall:
-    post:
-      summary: Batch recall across memories
-      description: Search for multiple queries across all user memories or within a specific memory in a single request
-      operationId: batchRecallMemories
-      tags:
-        - Recall
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BatchRecallRequest'
-            example:
-              queries:
-                - "machine learning concepts"
-                - "data processing pipeline"
-                - "authentication methods"
-              memoryId: "123e4567-e89b-12d3-a456-426614174000"
-      responses:
-        '200':
-          description: Batch recall results
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
+    Unauthorized:
+      description: Unauthorized - valid authentication required
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
                 type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BatchRecallResponse'
-            example:
-              results:
-                - query: "machine learning concepts"
-                  matches:
-                    - memoryId: "123e4567-e89b-12d3-a456-426614174000"
-                      memoryName: "AI Research Notes"
-                      timestamp: "00:15:30"
-                      snippet: "Neural networks are a fundamental concept in machine learning..."
-                      score: 0.95
-                      createdAt: "2024-01-15T10:30:00Z"
-                - query: "data processing pipeline"
-                  matches:
-                    - memoryId: "456e7890-e12b-34d5-a789-426614174111"
-                      memoryName: "ETL Documentation"
-                      timestamp: "00:05:20"
-                      snippet: "The data processing pipeline consists of extraction, transformation..."
-                      score: 0.88
-                      createdAt: "2024-01-14T14:20:00Z"
-        '400':
-          description: Invalid request (empty queries, too many queries, etc.)
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
+                example: "unauthorized"
+              message:
                 type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
+                example: "Valid authorization required"
+
+    TierRequired:
+      description: Feature requires Pro or Enterprise tier
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
                 type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                example: "tier_required"
+              message:
+                type: string
+                example: "This feature requires Pro or Enterprise tier"
+              requiredTier:
+                type: string
+                example: "Pro"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "not_found"
+              message:
+                type: string
+                example: "Requested resource was not found"
+
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "internal_error"
+              message:
+                type: string
+                example: "An internal server error occurred"
 
 tags:
-  - name: System
-    description: System health and status operations
-  - name: Memories
-    description: Memory file ingestion and management
+  - name: Health
+    description: Service health and status endpoints
+  - name: Memory Ingestion
+    description: Upload and manage memory files
   - name: Search
-    description: Search operations within memories
-  - name: Recall
-    description: Recall operations across memories
-  - name: API Keys
-    description: API key management
-  - name: Usage
-    description: Usage statistics and analytics
-  /v1/billing/subscription:
-    get:
-      summary: Get subscription details
-      description: Retrieve current subscription information including plan, billing period, and status
-      operationId: getSubscription
-      tags:
-        - Billing
-      responses:
-        '200':
-          description: Subscription details
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Subscription'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /v1/billing/checkout:
-    post:
-      summary: Create checkout session
-      description: Create a Stripe checkout session for subscription upgrade or modification
-      operationId: createCheckoutSession
-      tags:
-        - Billing
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CheckoutRequest'
-            example:
-              priceId: "price_1234567890"
-              billingPeriod: "annual"
-              promoCode: "SAVE20"
-      responses:
-        '200':
-          description: Checkout session created successfully
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CheckoutResponse'
-        '400':
-          description: Invalid request (invalid promo code, etc.)
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /v1/billing/portal:
-    post:
-      summary: Create customer portal session
-      description: Create a Stripe customer portal session for subscription management
-      operationId: createPortalSession
-      tags:
-        - Billing
-      responses:
-        '200':
-          description: Portal session created successfully
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PortalResponse'
-        '401':
-          description: Unauthorized
-          headers:
-            X-API-Version:
-              description: API version
-              schema:
-                type: string
-                example: "1.0"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-tags:
-  - name: System
-    description: System health and status operations
-  - name: Memories
-    description: Memory file ingestion and management
-  - name: Search
-    description: Search operations within memories
-  - name: Recall
-    description: Recall operations across memories
-  - name: API Keys
-    description: API key management
-  - name: Usage
-    description: Usage statistics and analytics
-  - name: Billing
-    description: Subscription and billing operations
+    description: Semantic search capabilities
+  - name: AI Features
+    description: Advanced AI-powered features (Pro/Enterprise)
