@@ -160,7 +160,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .to_string();
 
     // After successful metadata creation, trigger sketch building
-    if let Some(sketch_queue_url) = std::env::var("SKETCH_BUILDER_QUEUE_URL").ok() {
+    if let Ok(sketch_queue_url) = std::env::var("SKETCH_BUILDER_QUEUE_URL") {
         let sketch_message = SketchBuilderMessage {
             memory_id: memory_id.clone(),
             user_id: user_id.to_string(),
