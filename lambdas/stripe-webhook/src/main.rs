@@ -177,7 +177,8 @@ async fn handle_checkout_completed(
         session
             .metadata
             .as_ref()
-            .and_then(|m| m.get("promoCode")).cloned()
+            .and_then(|m| m.get("promoCode"))
+            .cloned()
     } else {
         None
     };

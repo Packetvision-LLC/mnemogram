@@ -216,9 +216,7 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
                 );
 
                 // Check if we should trigger an index rebuild (MNEM-158)
-                if validation_result == "valid"
-                    && new_frame_count > previous_frame_count + 100
-                {
+                if validation_result == "valid" && new_frame_count > previous_frame_count + 100 {
                     if let Some(queue_url) = &index_rebuild_queue_url {
                         let frame_increase = new_frame_count - previous_frame_count;
                         tracing::info!(
@@ -237,13 +235,13 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
                         )
                         .await
                         {
-                        tracing::error!(
-                            "Failed to trigger index rebuild for memory {}: {}",
-                            memory_id,
-                            e
-                        );
+                            tracing::error!(
+                                "Failed to trigger index rebuild for memory {}: {}",
+                                memory_id,
+                                e
+                            );
+                        }
                     }
-                }
                 }
             }
             Err(e) => {
