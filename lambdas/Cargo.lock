@@ -73,6 +73,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
+ "aws-sdk-sqs",
  "chrono",
  "lambda_http",
  "lambda_runtime 0.8.3",
