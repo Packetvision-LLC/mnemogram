@@ -1,5 +1,4 @@
 use lambda_http::{Request, RequestExt};
-use serde_json::Value;
 
 pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
     // Try to get user ID from headers first (common pattern)
@@ -15,10 +14,10 @@ pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
     // Serialize the context to JSON to work around type issues
     if let Ok(context_json) = serde_json::to_value(&context) {
         // Try different paths where user ID might be stored
-        let possible_paths = [
-            ["authorizer", "userId"],
-            ["authorizer", "fields", "userId"],
-            ["authorizer", "principalId"],
+        let possible_paths: Vec<Vec<&str>> = vec![
+            vec!["authorizer", "userId"],
+            vec!["authorizer", "fields", "userId"],
+            vec!["authorizer", "principalId"],
         ];
 
         for path in &possible_paths {
