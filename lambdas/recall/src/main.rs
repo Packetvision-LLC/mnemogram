@@ -5,238 +5,496 @@ use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shared::memvid::{MemvidClient, MemvidSearchResult};
+use shared::errors::MnemogramError;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Deserialize)]
 struct RecallRequest {
-    query: String,
-    #[serde(default = "default_top_k")]
-    top_k: usize,
+    #[serde(default = "default_limit")]
+    limit: usize,
+    offset: Option<usize>,
+    include_metadata: Option<bool>,
 }
 
-fn default_top_k() -> usize {
-    20
+fn default_limit() -> usize {
+    50
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 struct RecallResult {
     #[serde(rename = "memoryId")]
     memory_id: String,
-    #[serde(rename = "memoryName")]
-    memory_name: String,
     #[serde(rename = "timestamp")]
     timestamp: Option<String>,
     #[serde(rename = "snippet")]
     snippet: String,
     #[serde(rename = "score")]
     score: f64,
-    #[serde(rename = "createdAt")]
-    created_at: String,
     #[serde(rename = "frameId")]
     frame_id: Option<String>,
+    #[serde(rename = "metadata", skip_serializing_if = "Option::is_none")]
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct BulkRecallResult {
+    #[serde(rename = "memoryId")]
+    memory_id: String,
+    name: String,
+    #[serde(rename = "totalChunks")]
+    total_chunks: usize,
+    #[serde(rename = "retrievedChunks")]
+    retrieved_chunks: usize,
+    status: String,
+    chunks: Vec<RecallResult>,
 }
 
 #[derive(Serialize)]
 struct RecallResponse {
-    query: String,
+    #[serde(rename = "memoryId")]
+    memory_id: String,
     results: Vec<RecallResult>,
     total: usize,
+    offset: usize,
+    limit: usize,
+    #[serde(rename = "hasMore")]
+    has_more: bool,
+    #[serde(rename = "retrievedAt")]
+    retrieved_at: String,
 }
 
-impl RecallResult {
-    fn from_memvid_result(
-        memvid_result: MemvidSearchResult,
-        memory_id: &str,
-        memory_name: &str,
-        created_at: &str,
-    ) -> Self {
-        RecallResult {
-            memory_id: memory_id.to_string(),
-            memory_name: memory_name.to_string(),
-            timestamp: memvid_result.timestamp,
-            snippet: memvid_result.snippet,
-            score: memvid_result.score,
-            created_at: created_at.to_string(),
-            frame_id: memvid_result.frame_id,
-        }
-    }
+#[derive(Serialize)]
+struct BulkRecallResponse {
+    #[serde(rename = "userId")]
+    user_id: String,
+    memories: Vec<BulkRecallResult>,
+    #[serde(rename = "totalMemories")]
+    total_memories: usize,
+    #[serde(rename = "totalChunks")]
+    total_chunks: usize,
+    #[serde(rename = "retrievedAt")]
+    retrieved_at: String,
 }
 
-/// POST /recall - Recall across all memories
-/// Accept query
-/// Search across user's memories using memvid integration
-/// Return aggregated results
+/// Memory retrieval operations using S3 Vectors
+/// Supports both individual memory recall and bulk retrieval
 async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
     let s3_client = S3Client::new(&config);
 
-    // Extract user ID from authorizer context or headers
+    // Extract user ID from authorizer context
     let user_id = event
         .headers()
         .get("x-user-id")
         .and_then(|v| v.to_str().ok())
-        .or_else(|| {
-            // Try to get from request context if available
-            if let Some(_context) = event.request_context().authorizer() {
-                // Note: We'll need to implement proper authorizer context parsing
-                // For now, just use a placeholder
-                None
-            } else {
-                None
-            }
-        })
         .unwrap_or("anonymous");
 
-    // Parse request body
-    let request_body: RecallRequest = match event.body() {
-        Body::Text(text) => serde_json::from_str(text)?,
-        Body::Binary(bytes) => serde_json::from_slice(bytes)?,
-        Body::Empty => {
-            return Ok(Response::builder()
-                .status(400)
+    // Determine operation type from path
+    let path = event.uri().path();
+    
+    match path {
+        path if path.contains("/memories/") && path.ends_with("/recall") => {
+            // Single memory recall: GET /memories/{id}/recall
+            handle_memory_recall(event, s3_client, dynamodb_client, user_id).await
+        }
+        path if path.ends_with("/recall") => {
+            // Bulk recall: GET /recall or POST /recall
+            handle_bulk_recall(event, s3_client, dynamodb_client, user_id).await
+        }
+        _ => {
+            Ok(Response::builder()
+                .status(404)
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&json!({
-                    "error": "missing_body",
-                    "message": "Request body with 'query' field is required"
+                    "error": "not_found",
+                    "message": "Endpoint not found"
                 }))?))
-                .map_err(Box::new)?);
+                .map_err(Box::new)?)
         }
-    };
+    }
+}
 
-    // Validate input
-    if request_body.query.trim().is_empty() {
+/// Handle single memory recall by ID
+async fn handle_memory_recall(
+    event: Request,
+    s3_client: S3Client,
+    dynamodb_client: aws_sdk_dynamodb::Client,
+    user_id: &str,
+) -> Result<Response<Body>, Error> {
+    // Extract memory ID from path parameters
+    let path_params = event.path_parameters();
+    let memory_id = path_params
+        .first("id")
+        .or_else(|| path_params.first("memoryId"))
+        .ok_or("Missing memory ID in path")?;
+
+    // Parse query parameters
+    let query_params = event.query_string_parameters();
+    let limit: usize = query_params
+        .first("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50)
+        .min(1000); // Cap at 1000
+    
+    let offset: usize = query_params
+        .first("offset")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let include_metadata = query_params
+        .first("include_metadata")
+        .map(|s| s == "true")
+        .unwrap_or(false);
+
+    // Verify memory exists and belongs to user
+    let memory_info = verify_memory_access(&dynamodb_client, memory_id, user_id).await?;
+
+    // Check if memory has been migrated to S3 Vectors
+    if !memory_info.vectors_migrated {
         return Ok(Response::builder()
-            .status(400)
+            .status(503)
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_string(&json!({
-                "error": "invalid_query",
-                "message": "Search query cannot be empty"
+                "error": "migration_pending",
+                "message": "This memory is being migrated to S3 Vectors. Please try again later.",
+                "memoryId": memory_id
             }))?))
             .map_err(Box::new)?);
     }
 
-    // Get all memories for this user from DynamoDB
-    let memories_table = std::env::var("MEMORIES_TABLE")
-        .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
-
+    // Initialize MemVid client with S3 Vectors backend
     let bucket = std::env::var("STORAGE_BUCKET")
+        .or_else(|_| std::env::var("MEMORY_BUCKET"))
         .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
-
-    // Use a query to find all memories for the user
-    let _key_condition = "#userId = :userId";
-    let _filter_condition = "#status = :status1 OR #status = :status2";
-
-    let mut expression_attribute_names = HashMap::new();
-    expression_attribute_names.insert("#userId".to_string(), "userId".to_string());
-    expression_attribute_names.insert("#status".to_string(), "status".to_string());
-
-    let mut expression_attribute_values = HashMap::new();
-    expression_attribute_values.insert(
-        ":userId".to_string(),
-        AttributeValue::S(user_id.to_string()),
-    );
-    expression_attribute_values.insert(
-        ":status1".to_string(),
-        AttributeValue::S("ready".to_string()),
-    );
-    expression_attribute_values.insert(
-        ":status2".to_string(),
-        AttributeValue::S("indexed".to_string()),
-    );
-
-    // For now, we'll do a scan since we might not have a GSI on userId yet
-    let scan_result = dynamodb_client
-        .scan()
-        .table_name(&memories_table)
-        .filter_expression("userId = :userId AND (#status = :status1 OR #status = :status2)")
-        .set_expression_attribute_names(Some(expression_attribute_names))
-        .set_expression_attribute_values(Some(expression_attribute_values))
-        .send()
-        .await
-        .map_err(Box::new)?;
-
-    let mut all_results = Vec::new();
+    
     let memvid_client = MemvidClient::new(s3_client, bucket);
 
-    if let Some(items) = scan_result.items {
-        for item in items {
-            // Extract memory metadata
-            let memory_id = item
-                .get("memoryId")
-                .and_then(|v| v.as_s().ok())
-                .map(|s| s.as_str())
-                .unwrap_or("unknown");
-
-            let memory_name = item
-                .get("name")
-                .and_then(|v| v.as_s().ok())
-                .map(|s| s.as_str())
-                .unwrap_or("Unnamed Memory");
-
-            let created_at = item
-                .get("createdAt")
-                .and_then(|v| v.as_s().ok())
-                .map(|s| s.as_str())
-                .unwrap_or("unknown");
-
-            // Search this memory using memvid
-            // Use smaller top_k per memory to stay within total limit
-            let per_memory_k = std::cmp::min(8, request_body.top_k);
-
-            match memvid_client
-                .search(memory_id, &request_body.query, per_memory_k)
-                .await
-            {
-                Ok(memvid_results) => {
-                    let memory_results: Vec<RecallResult> = memvid_results
-                        .into_iter()
-                        .map(|result| {
-                            RecallResult::from_memvid_result(
-                                result,
-                                memory_id,
-                                memory_name,
-                                created_at,
-                            )
-                        })
-                        .collect();
-
-                    all_results.extend(memory_results);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to search memory {}: {:?}", memory_id, e);
-                    // Continue with other memories rather than failing completely
-                }
-            }
+    // Retrieve memory content
+    let all_results = match memvid_client.retrieve_memory(memory_id, Some(limit + offset + 100)).await {
+        Ok(results) => results,
+        Err(MnemogramError::ExternalService(msg)) => {
+            tracing::error!("Memory retrieval failed: {}", msg);
+            return Ok(Response::builder()
+                .status(503)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&json!({
+                    "error": "retrieval_unavailable",
+                    "message": "Memory retrieval temporarily unavailable"
+                }))?))
+                .map_err(Box::new)?);
         }
-    }
+        Err(e) => {
+            tracing::error!("Unexpected error during retrieval: {:?}", e);
+            return Err(format!("Retrieval failed: {:?}", e).into());
+        }
+    };
 
-    // Sort by relevance score (descending)
-    all_results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // Apply offset and limit
+    let paginated_results: Vec<MemvidSearchResult> = all_results
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect();
 
-    // Limit results to requested top_k
-    all_results.truncate(request_body.top_k);
+    // Convert to API format
+    let results: Vec<RecallResult> = paginated_results
+        .iter()
+        .map(|result| RecallResult {
+            memory_id: memory_id.to_string(),
+            timestamp: result.timestamp.clone(),
+            snippet: result.snippet.clone(),
+            score: result.score,
+            frame_id: result.frame_id.clone(),
+            metadata: if include_metadata {
+                Some(json!({
+                    "source": "s3_vectors",
+                    "retrievalMethod": "vector_similarity"
+                }))
+            } else {
+                None
+            },
+        })
+        .collect();
+
+    let has_more = results.len() == limit;
 
     let response = RecallResponse {
-        query: request_body.query,
-        results: all_results.clone(),
-        total: all_results.len(),
+        memory_id: memory_id.to_string(),
+        results,
+        total: paginated_results.len(),
+        offset,
+        limit,
+        has_more,
+        retrieved_at: chrono::Utc::now().to_rfc3339(),
     };
 
     let body = serde_json::to_string(&response)?;
 
-    let resp = Response::builder()
+    Ok(Response::builder()
         .status(200)
         .header("content-type", "application/json")
         .body(Body::from(body))
+        .map_err(Box::new)?)
+}
+
+/// Handle bulk memory retrieval for a user
+async fn handle_bulk_recall(
+    event: Request,
+    s3_client: S3Client,
+    dynamodb_client: aws_sdk_dynamodb::Client,
+    user_id: &str,
+) -> Result<Response<Body>, Error> {
+    // Parse query parameters
+    let query_params = event.query_string_parameters();
+    let max_memories: usize = query_params
+        .first("max_memories")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
+        .min(50); // Cap at 50 memories for bulk operations
+
+    let chunks_per_memory: usize = query_params
+        .first("chunks_per_memory")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20)
+        .min(100); // Cap chunks per memory
+
+    // Get user's migrated memories
+    let user_memories = get_user_memories(&dynamodb_client, user_id, max_memories).await?;
+
+    if user_memories.is_empty() {
+        return Ok(Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&BulkRecallResponse {
+                user_id: user_id.to_string(),
+                memories: vec![],
+                total_memories: 0,
+                total_chunks: 0,
+                retrieved_at: chrono::Utc::now().to_rfc3339(),
+            })?))
+            .map_err(Box::new)?);
+    }
+
+    // Initialize MemVid client
+    let bucket = std::env::var("STORAGE_BUCKET")
+        .or_else(|_| std::env::var("MEMORY_BUCKET"))
+        .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
+    
+    let memvid_client = MemvidClient::new(s3_client, bucket);
+
+    // Retrieve chunks for each memory
+    let mut bulk_results = Vec::new();
+    let mut total_chunks = 0;
+
+    for memory in user_memories {
+        if !memory.vectors_migrated {
+            // Skip non-migrated memories
+            bulk_results.push(BulkRecallResult {
+                memory_id: memory.memory_id.clone(),
+                name: memory.name.clone(),
+                total_chunks: 0,
+                retrieved_chunks: 0,
+                status: "migration_pending".to_string(),
+                chunks: vec![],
+            });
+            continue;
+        }
+
+        match memvid_client.retrieve_memory(&memory.memory_id, Some(chunks_per_memory)).await {
+            Ok(results) => {
+                let chunks: Vec<RecallResult> = results
+                    .iter()
+                    .map(|result| RecallResult {
+                        memory_id: memory.memory_id.clone(),
+                        timestamp: result.timestamp.clone(),
+                        snippet: result.snippet.clone(),
+                        score: result.score,
+                        frame_id: result.frame_id.clone(),
+                        metadata: None, // Don't include metadata in bulk operations
+                    })
+                    .collect();
+
+                total_chunks += chunks.len();
+
+                bulk_results.push(BulkRecallResult {
+                    memory_id: memory.memory_id.clone(),
+                    name: memory.name,
+                    total_chunks: results.len(),
+                    retrieved_chunks: chunks.len(),
+                    status: "success".to_string(),
+                    chunks,
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Failed to retrieve memory {}: {}", memory.memory_id, e);
+                bulk_results.push(BulkRecallResult {
+                    memory_id: memory.memory_id.clone(),
+                    name: memory.name,
+                    total_chunks: 0,
+                    retrieved_chunks: 0,
+                    status: "error".to_string(),
+                    chunks: vec![],
+                });
+            }
+        }
+    }
+
+    let response = BulkRecallResponse {
+        user_id: user_id.to_string(),
+        memories: bulk_results,
+        total_memories: user_memories.len(),
+        total_chunks,
+        retrieved_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    let body = serde_json::to_string(&response)?;
+
+    Ok(Response::builder()
+        .status(200)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .map_err(Box::new)?)
+}
+
+#[derive(Debug)]
+struct MemoryInfo {
+    memory_id: String,
+    name: String,
+    vectors_migrated: bool,
+    status: String,
+}
+
+/// Verify user has access to memory and get basic info
+async fn verify_memory_access(
+    dynamodb_client: &aws_sdk_dynamodb::Client,
+    memory_id: &str,
+    user_id: &str,
+) -> Result<MemoryInfo, Box<dyn std::error::Error + Send + Sync>> {
+    let memories_table = std::env::var("MEMORIES_TABLE")
+        .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
+
+    let key = HashMap::from([
+        ("memoryId".to_string(), AttributeValue::S(memory_id.to_string()))
+    ]);
+
+    let get_result = dynamodb_client
+        .get_item()
+        .table_name(&memories_table)
+        .set_key(Some(key))
+        .send()
+        .await
         .map_err(Box::new)?;
 
-    Ok(resp)
+    let memory_item = get_result
+        .item
+        .ok_or("Memory not found")?;
+
+    // Check if the memory belongs to the user
+    let memory_user_id = memory_item
+        .get("userId")
+        .and_then(|v| v.as_s().ok())
+        .ok_or("Invalid memory record")?;
+
+    if memory_user_id != user_id {
+        return Err("Access denied - memory does not belong to user".into());
+    }
+
+    let name = memory_item
+        .get("name")
+        .and_then(|v| v.as_s().ok())
+        .unwrap_or("Untitled Memory")
+        .to_string();
+
+    let vectors_migrated = memory_item
+        .get("vectorsMigrated")
+        .and_then(|v| v.as_bool().ok())
+        .unwrap_or(false);
+
+    let status = memory_item
+        .get("status")
+        .and_then(|v| v.as_s().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    Ok(MemoryInfo {
+        memory_id: memory_id.to_string(),
+        name,
+        vectors_migrated,
+        status,
+    })
+}
+
+/// Get list of user's memories (only migrated ones for retrieval)
+async fn get_user_memories(
+    dynamodb_client: &aws_sdk_dynamodb::Client,
+    user_id: &str,
+    max_memories: usize,
+) -> Result<Vec<MemoryInfo>, Box<dyn std::error::Error + Send + Sync>> {
+    let memories_table = std::env::var("MEMORIES_TABLE")
+        .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
+
+    let mut memories = Vec::new();
+    let mut last_evaluated_key = None;
+
+    loop {
+        let mut query = dynamodb_client
+            .query()
+            .table_name(&memories_table)
+            .index_name("userId-createdAt-index") // Assume GSI exists
+            .key_condition_expression("userId = :userId")
+            .expression_attribute_values(":userId", AttributeValue::S(user_id.to_string()))
+            .limit(50); // Query in batches
+
+        if let Some(key) = last_evaluated_key {
+            query = query.set_exclusive_start_key(Some(key));
+        }
+
+        let result = query.send().await.map_err(Box::new)?;
+
+        if let Some(items) = result.items {
+            for item in items {
+                let memory_id = item.get("memoryId")
+                    .and_then(|v| v.as_s().ok())
+                    .unwrap_or("")
+                    .to_string();
+
+                let name = item.get("name")
+                    .and_then(|v| v.as_s().ok())
+                    .unwrap_or("Untitled Memory")
+                    .to_string();
+
+                let vectors_migrated = item.get("vectorsMigrated")
+                    .and_then(|v| v.as_bool().ok())
+                    .unwrap_or(false);
+
+                let status = item.get("status")
+                    .and_then(|v| v.as_s().ok())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                memories.push(MemoryInfo {
+                    memory_id,
+                    name,
+                    vectors_migrated,
+                    status,
+                });
+
+                if memories.len() >= max_memories {
+                    break;
+                }
+            }
+        }
+
+        last_evaluated_key = result.last_evaluated_key;
+
+        if last_evaluated_key.is_none() || memories.len() >= max_memories {
+            break;
+        }
+    }
+
+    Ok(memories)
 }
 
 #[tokio::main]

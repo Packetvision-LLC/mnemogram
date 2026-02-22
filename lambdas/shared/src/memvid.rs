@@ -89,7 +89,7 @@ impl MemvidClient {
     /// Execute operation with exponential backoff retry logic
     async fn retry_with_backoff<F, R, E>(&self, operation: F) -> Result<R, MnemogramError>
     where
-        F: Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R, E>> + Send + '_>>,
+        F: Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R, E>> + Send + 'static>>,
         E: std::fmt::Display,
     {
         let mut attempt = 0;
@@ -194,7 +194,7 @@ impl MemvidClient {
         let query_embedding = self.generate_embedding(query).await?;
 
         // Perform vector similarity search
-        let query_vector = aws_sdk_s3vectors::types::QueryVector::Float32(query_embedding);
+        let query_vector = aws_sdk_s3vectors::types::VectorData::Float32(query_embedding);
 
         let response = self.s3vectors_client
             .query_vectors()
@@ -205,8 +205,13 @@ impl MemvidClient {
             .return_metadata(true)
             .return_distance(true)
             // Filter by memory_id to search within specific memory
-            .filter(serde_json::json!({
-                "memory_id": memory_id
+            .filter(aws_smithy_types::Document::Object({
+                let mut map = std::collections::HashMap::new();
+                map.insert(
+                    "memory_id".to_string(), 
+                    aws_smithy_types::Document::String(memory_id.to_string())
+                );
+                map
             }))
             .send()
             .await
@@ -215,7 +220,8 @@ impl MemvidClient {
         // Convert S3 Vectors response to MemvidSearchResult format
         let mut results = Vec::new();
         
-        if let Some(vectors) = response.vectors() {
+        let vectors = response.vectors();
+        if !vectors.is_empty() {
             for vector in vectors {
                 let snippet = Self::extract_metadata_field(vector.metadata(), &["text", "content", "snippet"])
                     .unwrap_or_else(|| "No content available".to_string());
