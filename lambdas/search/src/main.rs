@@ -4,8 +4,8 @@ use aws_sdk_s3::Client as S3Client;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shared::errors::MnemogramError;
 use shared::memvid::{MemvidClient, MemvidSearchResult};
+use shared::errors::MnemogramError;
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
@@ -41,6 +41,8 @@ struct SearchResponse {
     memory_id: String,
     results: Vec<SearchResult>,
     total: usize,
+    #[serde(rename = "searchMethod")]
+    search_method: String,
 }
 
 impl From<MemvidSearchResult> for SearchResult {
@@ -55,9 +57,9 @@ impl From<MemvidSearchResult> for SearchResult {
     }
 }
 
-/// POST /memories/{id}/search - Search within a memory
+/// POST /memories/{id}/search - Search within a memory using S3 Vectors
 /// Accept query + memoryId
-/// Return search results using memvid integration
+/// Return search results using S3 Vectors integration
 async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
@@ -118,11 +120,10 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Verify the memory exists and belongs to the user
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
-
-    let key = HashMap::from([(
-        "memoryId".to_string(),
-        AttributeValue::S(memory_id.to_string()),
-    )]);
+    
+    let key = HashMap::from([
+        ("memoryId".to_string(), AttributeValue::S(memory_id.to_string()))
+    ]);
 
     let get_result = dynamodb_client
         .get_item()
@@ -132,7 +133,9 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .await
         .map_err(Box::new)?;
 
-    let memory_item = get_result.item.ok_or("Memory not found")?;
+    let memory_item = get_result
+        .item
+        .ok_or("Memory not found")?;
 
     // Check if the memory belongs to the user
     let memory_user_id = memory_item
@@ -151,12 +154,30 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             .map_err(Box::new)?);
     }
 
+    // Check if memory has been migrated to S3 Vectors
+    let vectors_migrated = memory_item
+        .get("vectorsMigrated")
+        .and_then(|v| v.as_bool().ok())
+        .unwrap_or(false);
+
     // Check if memory is ready for search
     let status = memory_item
         .get("status")
         .and_then(|v| v.as_s().ok())
         .map(|s| s.as_str())
         .unwrap_or("unknown");
+
+    if !vectors_migrated {
+        return Ok(Response::builder()
+            .status(503)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&json!({
+                "error": "migration_pending",
+                "message": "This memory is being migrated to S3 Vectors. Please try again later.",
+                "status": status
+            }))?))
+            .map_err(Box::new)?);
+    }
 
     if status != "ready" && status != "indexed" {
         return Ok(Response::builder()
@@ -170,22 +191,19 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             .map_err(Box::new)?);
     }
 
-    // Initialize memvid client
+    // Initialize S3 Vectors client
     let bucket = std::env::var("STORAGE_BUCKET")
-        .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
-
+        .or_else(|_| std::env::var("MEMORY_BUCKET"))
+        .map_err(|_| "STORAGE_BUCKET or MEMORY_BUCKET environment variable not set")?;
+    
     let memvid_client = MemvidClient::new(s3_client, bucket);
-
-    // Perform search using memvid
-    let memvid_results = match memvid_client
-        .search(memory_id, &request_body.query, request_body.top_k)
-        .await
-    {
+    
+    // Perform search using S3 Vectors
+    let memvid_results = match memvid_client.search(memory_id, &request_body.query, request_body.top_k).await {
         Ok(results) => results,
         Err(MnemogramError::S3Error(msg)) | Err(MnemogramError::ExternalService(msg)) => {
-            tracing::error!("MemVid search failed: {}", msg);
-
-            // Fall back to placeholder for now if memvid fails
+            tracing::error!("S3 Vectors search failed: {}", msg);
+            
             return Ok(Response::builder()
                 .status(503)
                 .header("content-type", "application/json")
@@ -201,7 +219,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         }
     };
 
-    // Convert memvid results to API format
+    // Convert S3 Vectors results to API format
     let results: Vec<SearchResult> = memvid_results
         .into_iter()
         .map(|result| {
@@ -216,6 +234,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         memory_id: memory_id.to_string(),
         results: results.clone(),
         total: results.len(),
+        search_method: "s3_vectors".to_string(),
     };
 
     let body = serde_json::to_string(&response)?;
