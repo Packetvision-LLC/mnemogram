@@ -39,7 +39,7 @@ export class MnemogramStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       versioned: true,
-      // Lifecycle rules for cost optimization
+      // Note: IntelligentTiering configuration removed due to CDK API changes
       lifecycleRules: [
         {
           id: "TransitionToIA",
@@ -172,20 +172,6 @@ export class MnemogramStack extends cdk.Stack {
       pointInTimeRecovery: true,
     });
 
-    // DynamoDB table for threshold tracking
-    const thresholdTable = new dynamodb.Table(this, "ThresholdTable", {
-      tableName: `mnemogram-${stage}-threshold-tracking`,
-      partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
-      sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
-      billingMode,
-      readCapacity,
-      writeCapacity,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-      pointInTimeRecovery: true,
-      // TTL for automatic cleanup of old tracking records
-      timeToLiveAttribute: "ttl",
-    });
-
     // ── SQS Queues ──────────────────────────────────────────────────
 
     // Queue for triggering sketch building after memory ingestion
@@ -303,11 +289,9 @@ export class MnemogramStack extends cdk.Stack {
         SUBSCRIPTIONS_TABLE: subscriptionsTable.tableName,
         API_KEYS_TABLE: apiKeysTable.tableName,
         USAGE_TABLE: usageTable.tableName,
-        THRESHOLD_TABLE: thresholdTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
         SKETCH_BUILDER_QUEUE_URL: sketchBuilderQueue.queueUrl,
         INDEX_REBUILD_QUEUE_URL: indexRebuildQueue.queueUrl,
-        MAINTENANCE_QUEUE_URL: indexRebuildQueue.queueUrl, // Reuse index rebuild queue for maintenance
         ENRICHMENT_QUEUE_URL: enrichmentQueue.queueUrl,
       },
     };
@@ -584,16 +568,12 @@ export class MnemogramStack extends cdk.Stack {
     usageTable.grantReadWriteData(recallFn);
     usageTable.grantReadWriteData(batchRecallFn);
     usageTable.grantReadWriteData(searchMemoryFn);
-    thresholdTable.grantReadWriteData(ingestFn);
-    thresholdTable.grantReadWriteData(manageFn);
-    thresholdTable.grantReadWriteData(maintenanceFn);
 
     // Grant SQS permissions
     sketchBuilderQueue.grantSendMessages(ingestFn); // Trigger sketch building after ingest
     sketchBuilderQueue.grantConsumeMessages(sketchBuilderFn);
     indexRebuildQueue.grantSendMessages(validateUploadFn); // Trigger index rebuild
     indexRebuildQueue.grantSendMessages(maintenanceFn);
-    indexRebuildQueue.grantSendMessages(ingestFn); // Trigger index rebuild based on thresholds
     enrichmentQueue.grantSendMessages(ingestFn); // Trigger enrichment after ingest
     enrichmentQueue.grantConsumeMessages(enrichmentFn);
 
@@ -1265,138 +1245,6 @@ export class MnemogramStack extends cdk.Stack {
       new cloudwatch.GraphWidget({
         title: "DynamoDB Consumed Write Capacity",
         left: dynamoTables.map(table => table.metricConsumedWriteCapacityUnits()),
-        width: 12,
-        height: 6,
-      })
-    );
-
-    // ── S3 Vectors Monitoring (MNEM-235) ────────────────────────────
-
-    // S3 bucket monitoring for memory files storage and retrieval
-    const s3BucketSizeBytes = new cloudwatch.Metric({
-      namespace: "AWS/S3",
-      metricName: "BucketSizeBytes",
-      dimensionsMap: {
-        BucketName: memoryBucket.bucketName,
-        StorageType: "StandardStorage",
-      },
-      statistic: "Average",
-      period: cdk.Duration.days(1), // Daily measurement
-    });
-
-    const s3NumberOfObjects = new cloudwatch.Metric({
-      namespace: "AWS/S3",
-      metricName: "NumberOfObjects",
-      dimensionsMap: {
-        BucketName: memoryBucket.bucketName,
-        StorageType: "AllStorageTypes",
-      },
-      statistic: "Average",
-      period: cdk.Duration.days(1), // Daily measurement
-    });
-
-    // S3 request metrics for vectors operations
-    const s3GetRequests = new cloudwatch.Metric({
-      namespace: "AWS/S3",
-      metricName: "NumberOfObjects",
-      dimensionsMap: {
-        BucketName: memoryBucket.bucketName,
-        FilterId: "EntireBucket",
-      },
-      statistic: "Sum",
-      period: cdk.Duration.minutes(5),
-    });
-
-    // S3 monitoring alarms
-    new cloudwatch.Alarm(this, "S3BucketSizeAlarm", {
-      alarmName: `mnemogram-${stage}-s3-bucket-size`,
-      alarmDescription: `S3 bucket size monitoring for memory files (${stage})`,
-      metric: s3BucketSizeBytes,
-      threshold: stage === "prod" ? 100 * 1024 * 1024 * 1024 : 10 * 1024 * 1024 * 1024, // 100GB prod, 10GB dev
-      evaluationPeriods: 1,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
-
-    // Cost monitoring alarm - S3 storage costs
-    const s3CostMetric = new cloudwatch.Metric({
-      namespace: "AWS/Billing",
-      metricName: "EstimatedCharges",
-      dimensionsMap: {
-        ServiceName: "AmazonS3",
-        Currency: "USD",
-      },
-      statistic: "Maximum",
-      period: cdk.Duration.hours(6), // Check every 6 hours
-    });
-
-    new cloudwatch.Alarm(this, "S3CostAlarm", {
-      alarmName: `mnemogram-${stage}-s3-cost`,
-      alarmDescription: `S3 cost monitoring for memory storage (${stage})`,
-      metric: s3CostMetric,
-      threshold: stage === "prod" ? 500 : 50, // $500 prod, $50 dev per month
-      evaluationPeriods: 1,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
-
-    // Lambda costs monitoring
-    const lambdaCostMetric = new cloudwatch.Metric({
-      namespace: "AWS/Billing",
-      metricName: "EstimatedCharges",
-      dimensionsMap: {
-        ServiceName: "AWSLambda",
-        Currency: "USD",
-      },
-      statistic: "Maximum",
-      period: cdk.Duration.hours(6),
-    });
-
-    new cloudwatch.Alarm(this, "LambdaCostAlarm", {
-      alarmName: `mnemogram-${stage}-lambda-cost`,
-      alarmDescription: `Lambda cost monitoring for vector processing (${stage})`,
-      metric: lambdaCostMetric,
-      threshold: stage === "prod" ? 200 : 20, // $200 prod, $20 dev per month
-      evaluationPeriods: 1,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-    }).addAlarmAction(new cloudwatchActions.SnsAction(alertsTopic));
-
-    // Add S3 vectors operations monitoring to dashboard
-    dashboard.addWidgets(
-      new cloudwatch.GraphWidget({
-        title: "S3 Vectors Storage Metrics",
-        left: [s3BucketSizeBytes, s3NumberOfObjects],
-        width: 12,
-        height: 6,
-      }),
-      new cloudwatch.GraphWidget({
-        title: "Cost Monitoring (S3 + Lambda)",
-        left: [s3CostMetric, lambdaCostMetric],
-        width: 12,
-        height: 6,
-      })
-    );
-
-    // Add performance monitoring for vector search operations
-    dashboard.addWidgets(
-      new cloudwatch.GraphWidget({
-        title: "Vector Search Performance",
-        left: [
-          searchFn.metricDuration({ statistic: "Average" }),
-          recallFn.metricDuration({ statistic: "Average" }),
-          searchMemoryFn.metricDuration({ statistic: "Average" }),
-        ],
-        width: 12,
-        height: 6,
-      }),
-      new cloudwatch.GraphWidget({
-        title: "S3 Vector File Operations",
-        left: [
-          validateUploadFn.metricInvocations(),
-          maintenanceFn.metricInvocations(),
-          sketchBuilderFn.metricInvocations(),
-        ],
         width: 12,
         height: 6,
       })
