@@ -6,7 +6,6 @@ use aws_config::BehaviorVersion;
 use std::collections::HashMap;
 use std::time::Duration;
 use crate::errors::MnemogramError;
-use uuid::Uuid;
 
 /// Result from S3 Vectors search (maintains compatibility with MemVid interface)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,11 +231,12 @@ impl MemvidClient {
 
                 // Convert distance to similarity score (higher is better)
                 let score = if let Some(distance) = vector.distance() {
+                    let distance_f64 = distance as f64;
                     // For cosine distance, similarity = 1 - distance
                     // For euclidean distance, we can use 1 / (1 + distance)
                     match response.distance_metric() {
-                        Some(aws_sdk_s3vectors::types::DistanceMetric::Cosine) => (1.0 - distance).max(0.0),
-                        _ => (1.0 / (1.0 + distance)).min(1.0), // Euclidean or unknown
+                        Some(aws_sdk_s3vectors::types::DistanceMetric::Cosine) => (1.0 - distance_f64).max(0.0),
+                        _ => (1.0 / (1.0 + distance_f64)).min(1.0), // Euclidean or unknown
                     }
                 } else {
                     0.0
@@ -427,10 +427,10 @@ impl MemvidClient {
 
     /// Extract field from metadata with fallback options
     fn extract_metadata_field(metadata: Option<&aws_smithy_types::Document>, field_names: &[&str]) -> Option<String> {
-        metadata?.as_object().ok().and_then(|obj| {
+        metadata?.as_object().ok().and_then(|obj: &std::collections::HashMap<String, aws_smithy_types::Document>| {
             for field in field_names {
                 if let Some(value) = obj.get(*field) {
-                    if let Some(s) = value.as_string().ok() {
+                    if let Ok(s) = value.as_string() {
                         return Some(s.to_string());
                     }
                 }
