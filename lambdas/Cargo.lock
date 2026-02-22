@@ -2636,6 +2636,7 @@ dependencies = [
  "aws-sdk-s3vectors",
  "bytes",
  "chrono",
+ "fastrand",
  "jsonwebtoken",
  "lambda_http",
  "lambda_runtime 0.8.3",

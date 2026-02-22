@@ -116,7 +116,7 @@ impl MemvidClient {
                     
                     // Exponential backoff with jitter
                     delay = std::cmp::min(delay * 2, self.retry_config.max_delay_ms);
-                    delay += (fastrand::u64(0..delay / 4)); // Add up to 25% jitter
+                    delay += fastrand::u64(0..delay / 4); // Add up to 25% jitter
                 }
             }
         }
@@ -318,15 +318,15 @@ impl MemvidClient {
             metadata.insert("stored_at".to_string(), chrono::Utc::now().to_rfc3339());
 
             // Convert metadata to the format expected by S3 Vectors
-            let metadata_document: aws_sdk_s3vectors::primitives::Document = 
-                serde_json::from_str(&serde_json::to_string(&metadata)
+            let metadata_document: aws_smithy_types::Document = 
+                aws_smithy_types::Document::from_json(&serde_json::to_string(&metadata)
                     .map_err(|e| MnemogramError::Internal(format!("Failed to serialize metadata for chunk {}: {}", i, e)))?)
                 .map_err(|e| MnemogramError::Internal(format!("Failed to convert metadata for chunk {}: {}", i, e)))?;
 
-            // Create vector object
-            let vector = aws_sdk_s3vectors::types::Vector::builder()
+            // Create PutInputVector object
+            let vector = aws_sdk_s3vectors::types::PutInputVector::builder()
                 .key(format!("{}_{}", memory_id, i))
-                .vector_data(aws_sdk_s3vectors::types::VectorData::Float32(embedding))
+                .data(aws_sdk_s3vectors::types::VectorData::Float32(embedding))
                 .metadata(metadata_document)
                 .build()
                 .map_err(|e| MnemogramError::Internal(format!("Failed to build vector for chunk {}: {}", i, e)))?;
@@ -426,12 +426,12 @@ impl MemvidClient {
     }
 
     /// Extract field from metadata with fallback options
-    fn extract_metadata_field(metadata: Option<&aws_sdk_s3vectors::primitives::Document>, field_names: &[&str]) -> Option<String> {
+    fn extract_metadata_field(metadata: Option<&aws_smithy_types::Document>, field_names: &[&str]) -> Option<String> {
         metadata?.as_object().ok().and_then(|obj| {
             for field in field_names {
                 if let Some(value) = obj.get(*field) {
-                    if let Some(s) = value.as_string() {
-                        return Some(s.clone());
+                    if let Some(s) = value.as_string().ok() {
+                        return Some(s.to_string());
                     }
                 }
             }
@@ -480,7 +480,7 @@ impl MemvidClient {
 
         // Test vector index accessibility
         let test_embedding = vec![0.0_f32; 1024]; // 1024-dim zero vector for testing
-        let query_vector = aws_sdk_s3vectors::types::QueryVector::Float32(test_embedding);
+        let query_vector = aws_sdk_s3vectors::types::VectorData::Float32(test_embedding);
 
         let index_accessible = match self.s3vectors_client
             .query_vectors()
