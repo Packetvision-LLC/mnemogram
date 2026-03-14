@@ -6,7 +6,7 @@ use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde_json::{json, Value};
 use shared::memvid::MemvidClient;
 use std::collections::HashMap;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 mod extract_user_id;
@@ -118,6 +118,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let vectors_migrated = memory_item
         .get("vectorsMigrated")
         .and_then(|v| v.as_bool().ok())
+        .copied()
         .unwrap_or(false);
 
     if !vectors_migrated {

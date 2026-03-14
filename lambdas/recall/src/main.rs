@@ -79,7 +79,7 @@ struct BulkRecallResponse {
 
 /// Memory retrieval operations using S3 Vectors
 /// Supports both individual memory recall and bulk retrieval
-async fn handler(event: &Request) -> Result<Response<Body>, Error> {
+async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
     let s3_client = S3Client::new(&config);
@@ -97,11 +97,11 @@ async fn handler(event: &Request) -> Result<Response<Body>, Error> {
     match path {
         path if path.contains("/memories/") && path.ends_with("/recall") => {
             // Single memory recall: GET /memories/{id}/recall
-            handle_memory_recall(event, s3_client, dynamodb_client, user_id).await
+            handle_memory_recall(&event, s3_client, dynamodb_client, user_id).await
         }
         path if path.ends_with("/recall") => {
             // Bulk recall: GET /recall or POST /recall
-            handle_bulk_recall(event, s3_client, dynamodb_client, user_id).await
+            handle_bulk_recall(&event, s3_client, dynamodb_client, user_id).await
         }
         _ => Ok(Response::builder()
             .status(404)
