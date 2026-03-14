@@ -5,7 +5,6 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3vectors::Client as S3VectorsClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 
 /// Result from S3 Vectors search (maintains compatibility with MemVid interface)
 #[derive(Debug, Clone, Serialize, Deserialize)]
