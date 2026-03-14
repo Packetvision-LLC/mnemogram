@@ -4,8 +4,8 @@ use aws_sdk_s3::Client as S3Client;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shared::memvid::{MemvidClient, MemvidSearchResult};
 use shared::errors::MnemogramError;
+use shared::memvid::{MemvidClient, MemvidSearchResult};
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
@@ -93,7 +93,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
 
     // Determine operation type from path
     let path = event.uri().path();
-    
+
     match path {
         path if path.contains("/memories/") && path.ends_with("/recall") => {
             // Single memory recall: GET /memories/{id}/recall
@@ -103,16 +103,14 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
             // Bulk recall: GET /recall or POST /recall
             handle_bulk_recall(event, s3_client, dynamodb_client, user_id).await
         }
-        _ => {
-            Ok(Response::builder()
-                .status(404)
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_string(&json!({
-                    "error": "not_found",
-                    "message": "Endpoint not found"
-                }))?))
-                .map_err(Box::new)?)
-        }
+        _ => Ok(Response::builder()
+            .status(404)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&json!({
+                "error": "not_found",
+                "message": "Endpoint not found"
+            }))?))
+            .map_err(Box::new)?),
     }
 }
 
@@ -137,7 +135,7 @@ async fn handle_memory_recall(
         .and_then(|s| s.parse().ok())
         .unwrap_or(50)
         .min(1000); // Cap at 1000
-    
+
     let offset: usize = query_params
         .first("offset")
         .and_then(|s| s.parse().ok())
@@ -168,11 +166,14 @@ async fn handle_memory_recall(
     let bucket = std::env::var("STORAGE_BUCKET")
         .or_else(|_| std::env::var("MEMORY_BUCKET"))
         .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
-    
+
     let memvid_client = MemvidClient::new(s3_client, bucket);
 
     // Retrieve memory content
-    let all_results = match memvid_client.retrieve_memory(memory_id, Some(limit + offset + 100)).await {
+    let all_results = match memvid_client
+        .retrieve_memory(memory_id, Some(limit + offset + 100))
+        .await
+    {
         Ok(results) => results,
         Err(MnemogramError::ExternalService(msg)) => {
             tracing::error!("Memory retrieval failed: {}", msg);
@@ -192,11 +193,8 @@ async fn handle_memory_recall(
     };
 
     // Apply offset and limit
-    let paginated_results: Vec<MemvidSearchResult> = all_results
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect();
+    let paginated_results: Vec<MemvidSearchResult> =
+        all_results.into_iter().skip(offset).take(limit).collect();
 
     // Convert to API format
     let results: Vec<RecallResult> = paginated_results
@@ -281,7 +279,7 @@ async fn handle_bulk_recall(
     let bucket = std::env::var("STORAGE_BUCKET")
         .or_else(|_| std::env::var("MEMORY_BUCKET"))
         .map_err(|_| "STORAGE_BUCKET environment variable not set")?;
-    
+
     let memvid_client = MemvidClient::new(s3_client, bucket);
 
     // Retrieve chunks for each memory
@@ -302,7 +300,10 @@ async fn handle_bulk_recall(
             continue;
         }
 
-        match memvid_client.retrieve_memory(&memory.memory_id, Some(chunks_per_memory)).await {
+        match memvid_client
+            .retrieve_memory(&memory.memory_id, Some(chunks_per_memory))
+            .await
+        {
             Ok(results) => {
                 let chunks: Vec<RecallResult> = results
                     .iter()
@@ -375,9 +376,10 @@ async fn verify_memory_access(
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
 
-    let key = HashMap::from([
-        ("memoryId".to_string(), AttributeValue::S(memory_id.to_string()))
-    ]);
+    let key = HashMap::from([(
+        "memoryId".to_string(),
+        AttributeValue::S(memory_id.to_string()),
+    )]);
 
     let get_result = dynamodb_client
         .get_item()
@@ -387,9 +389,7 @@ async fn verify_memory_access(
         .await
         .map_err(Box::new)?;
 
-    let memory_item = get_result
-        .item
-        .ok_or("Memory not found")?;
+    let memory_item = get_result.item.ok_or("Memory not found")?;
 
     // Check if the memory belongs to the user
     let memory_user_id = memory_item
@@ -455,21 +455,25 @@ async fn get_user_memories(
 
         if let Some(items) = result.items {
             for item in items {
-                let memory_id = item.get("memoryId")
+                let memory_id = item
+                    .get("memoryId")
                     .and_then(|v| v.as_s().ok())
                     .unwrap_or("")
                     .to_string();
 
-                let name = item.get("name")
+                let name = item
+                    .get("name")
                     .and_then(|v| v.as_s().ok())
                     .unwrap_or("Untitled Memory")
                     .to_string();
 
-                let vectors_migrated = item.get("vectorsMigrated")
+                let vectors_migrated = item
+                    .get("vectorsMigrated")
                     .and_then(|v| v.as_bool().ok())
                     .unwrap_or(false);
 
-                let status = item.get("status")
+                let status = item
+                    .get("status")
                     .and_then(|v| v.as_s().ok())
                     .unwrap_or("unknown")
                     .to_string();

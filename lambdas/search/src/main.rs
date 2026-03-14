@@ -4,8 +4,8 @@ use aws_sdk_s3::Client as S3Client;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shared::memvid::{MemvidClient, MemvidSearchResult};
 use shared::errors::MnemogramError;
+use shared::memvid::{MemvidClient, MemvidSearchResult};
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
 
@@ -120,10 +120,11 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Verify the memory exists and belongs to the user
     let memories_table = std::env::var("MEMORIES_TABLE")
         .map_err(|_| "MEMORIES_TABLE environment variable not set")?;
-    
-    let key = HashMap::from([
-        ("memoryId".to_string(), AttributeValue::S(memory_id.to_string()))
-    ]);
+
+    let key = HashMap::from([(
+        "memoryId".to_string(),
+        AttributeValue::S(memory_id.to_string()),
+    )]);
 
     let get_result = dynamodb_client
         .get_item()
@@ -133,9 +134,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .await
         .map_err(Box::new)?;
 
-    let memory_item = get_result
-        .item
-        .ok_or("Memory not found")?;
+    let memory_item = get_result.item.ok_or("Memory not found")?;
 
     // Check if the memory belongs to the user
     let memory_user_id = memory_item
@@ -195,15 +194,18 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let bucket = std::env::var("STORAGE_BUCKET")
         .or_else(|_| std::env::var("MEMORY_BUCKET"))
         .map_err(|_| "STORAGE_BUCKET or MEMORY_BUCKET environment variable not set")?;
-    
+
     let memvid_client = MemvidClient::new(s3_client, bucket);
-    
+
     // Perform search using S3 Vectors
-    let memvid_results = match memvid_client.search(memory_id, &request_body.query, request_body.top_k).await {
+    let memvid_results = match memvid_client
+        .search(memory_id, &request_body.query, request_body.top_k)
+        .await
+    {
         Ok(results) => results,
         Err(MnemogramError::S3Error(msg)) | Err(MnemogramError::ExternalService(msg)) => {
             tracing::error!("S3 Vectors search failed: {}", msg);
-            
+
             return Ok(Response::builder()
                 .status(503)
                 .header("content-type", "application/json")
