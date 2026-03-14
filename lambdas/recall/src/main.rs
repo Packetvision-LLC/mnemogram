@@ -79,7 +79,7 @@ struct BulkRecallResponse {
 
 /// Memory retrieval operations using S3 Vectors
 /// Supports both individual memory recall and bulk retrieval
-async fn handler(event: Request) -> Result<Response<Body>, Error> {
+async fn handler(event: &Request) -> Result<Response<Body>, Error> {
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let dynamodb_client = aws_sdk_dynamodb::Client::new(&config);
     let s3_client = S3Client::new(&config);
@@ -92,7 +92,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .unwrap_or("anonymous");
 
     // Determine operation type from path
-    let path = event.uri().path();
+    let path = event.uri().path().to_string();
 
     match path {
         path if path.contains("/memories/") && path.ends_with("/recall") => {
@@ -116,7 +116,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
 
 /// Handle single memory recall by ID
 async fn handle_memory_recall(
-    event: Request,
+    event: &Request,
     s3_client: S3Client,
     dynamodb_client: aws_sdk_dynamodb::Client,
     user_id: &str,
@@ -239,7 +239,7 @@ async fn handle_memory_recall(
 
 /// Handle bulk memory retrieval for a user
 async fn handle_bulk_recall(
-    event: Request,
+    event: &Request,
     s3_client: S3Client,
     dynamodb_client: aws_sdk_dynamodb::Client,
     user_id: &str,
@@ -286,7 +286,7 @@ async fn handle_bulk_recall(
     let mut bulk_results = Vec::new();
     let mut total_chunks = 0;
 
-    for memory in user_memories {
+    for memory in &user_memories {
         if !memory.vectors_migrated {
             // Skip non-migrated memories
             bulk_results.push(BulkRecallResult {
@@ -321,7 +321,7 @@ async fn handle_bulk_recall(
 
                 bulk_results.push(BulkRecallResult {
                     memory_id: memory.memory_id.clone(),
-                    name: memory.name,
+                    name: memory.name.clone(),
                     total_chunks: results.len(),
                     retrieved_chunks: chunks.len(),
                     status: "success".to_string(),
@@ -332,7 +332,7 @@ async fn handle_bulk_recall(
                 tracing::warn!("Failed to retrieve memory {}: {}", memory.memory_id, e);
                 bulk_results.push(BulkRecallResult {
                     memory_id: memory.memory_id.clone(),
-                    name: memory.name,
+                    name: memory.name.clone(),
                     total_chunks: 0,
                     retrieved_chunks: 0,
                     status: "error".to_string(),
@@ -403,20 +403,19 @@ async fn verify_memory_access(
 
     let name = memory_item
         .get("name")
-        .and_then(|v| v.as_s().ok())
-        .unwrap_or("Untitled Memory")
-        .to_string();
+        .and_then(|v| v.as_s().ok().map(ToString::to_string))
+        .unwrap_or_else(|| "Untitled Memory".to_string());
 
     let vectors_migrated = memory_item
         .get("vectorsMigrated")
         .and_then(|v| v.as_bool().ok())
+        .copied()
         .unwrap_or(false);
 
     let status = memory_item
         .get("status")
-        .and_then(|v| v.as_s().ok())
-        .unwrap_or("unknown")
-        .to_string();
+        .and_then(|v| v.as_s().ok().map(ToString::to_string))
+        .unwrap_or_else(|| "unknown".to_string());
 
     Ok(MemoryInfo {
         memory_id: memory_id.to_string(),
@@ -457,26 +456,24 @@ async fn get_user_memories(
             for item in items {
                 let memory_id = item
                     .get("memoryId")
-                    .and_then(|v| v.as_s().ok())
-                    .unwrap_or("")
-                    .to_string();
+                    .and_then(|v| v.as_s().ok().map(ToString::to_string))
+                    .unwrap_or_else(|| "".to_string());
 
                 let name = item
                     .get("name")
-                    .and_then(|v| v.as_s().ok())
-                    .unwrap_or("Untitled Memory")
-                    .to_string();
+                    .and_then(|v| v.as_s().ok().map(ToString::to_string))
+                    .unwrap_or_else(|| "Untitled Memory".to_string());
 
                 let vectors_migrated = item
                     .get("vectorsMigrated")
                     .and_then(|v| v.as_bool().ok())
+                    .copied()
                     .unwrap_or(false);
 
                 let status = item
                     .get("status")
-                    .and_then(|v| v.as_s().ok())
-                    .unwrap_or("unknown")
-                    .to_string();
+                    .and_then(|v| v.as_s().ok().map(ToString::to_string))
+                    .unwrap_or_else(|| "unknown".to_string());
 
                 memories.push(MemoryInfo {
                     memory_id,
