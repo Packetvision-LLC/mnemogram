@@ -85,48 +85,6 @@ impl MemvidClient {
         self
     }
 
-    /// Execute operation with exponential backoff retry logic
-    async fn retry_with_backoff<F, R, E>(&self, operation: F) -> Result<R, MnemogramError>
-    where
-        F: Fn() -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<R, E>> + Send + 'static>,
-        >,
-        E: std::fmt::Display,
-    {
-        let mut attempt = 0;
-        let mut delay = self.retry_config.base_delay_ms;
-
-        loop {
-            attempt += 1;
-
-            match operation().await {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    if attempt >= self.retry_config.max_attempts {
-                        return Err(MnemogramError::ExternalService(format!(
-                            "Operation failed after {} attempts: {}",
-                            attempt, e
-                        )));
-                    }
-
-                    tracing::warn!(
-                        "Operation failed (attempt {}/{}): {}. Retrying in {}ms...",
-                        attempt,
-                        self.retry_config.max_attempts,
-                        e,
-                        delay
-                    );
-
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-
-                    // Exponential backoff with jitter
-                    delay = std::cmp::min(delay * 2, self.retry_config.max_delay_ms);
-                    delay += fastrand::u64(0..delay / 4); // Add up to 25% jitter
-                }
-            }
-        }
-    }
-
     /// Generate vector embeddings using Amazon Bedrock with retry logic
     async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>, MnemogramError> {
         if text.trim().is_empty() {
@@ -420,7 +378,7 @@ impl MemvidClient {
 
         // Insert vectors in batches
         const BATCH_SIZE: usize = 100;
-        let total_batches = (vectors_to_insert.len() + BATCH_SIZE - 1) / BATCH_SIZE;
+        let total_batches = vectors_to_insert.len().div_ceil(BATCH_SIZE);
 
         for (batch_num, batch) in vectors_to_insert.chunks(BATCH_SIZE).enumerate() {
             self.s3vectors_client
@@ -507,7 +465,7 @@ impl MemvidClient {
 
         // Delete vectors in batches
         const BATCH_SIZE: usize = 100;
-        let total_batches = (vector_keys.len() + BATCH_SIZE - 1) / BATCH_SIZE;
+        let total_batches = vector_keys.len().div_ceil(BATCH_SIZE);
 
         for (batch_num, batch) in vector_keys.chunks(BATCH_SIZE).enumerate() {
             self.s3vectors_client
