@@ -6,7 +6,7 @@ use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
 use serde_json::{json, Value};
 use shared::memvid::MemvidClient;
 use std::collections::HashMap;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 mod extract_user_id;
@@ -118,6 +118,7 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let vectors_migrated = memory_item
         .get("vectorsMigrated")
         .and_then(|v| v.as_bool().ok())
+        .copied()
         .unwrap_or(false);
 
     if !vectors_migrated {
@@ -137,20 +138,15 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let default_bucket = std::env::var("MEMORY_BUCKET")
         .or_else(|_| std::env::var("STORAGE_BUCKET"))
         .unwrap_or_default();
-    
+
     let bucket = memory_item
         .get("s3Bucket")
         .and_then(|v| v.as_s().ok())
         .map(|s| s.as_str())
         .unwrap_or(&default_bucket);
 
-    let search_results = search_memory_with_s3_vectors(
-        s3_client,
-        bucket,
-        memory_id,
-        query_text,
-        limit
-    ).await?;
+    let search_results =
+        search_memory_with_s3_vectors(s3_client, bucket, memory_id, query_text, limit).await?;
 
     // Update usage tracking
     let usage_table = std::env::var("USAGE_TABLE").unwrap_or_default();
@@ -210,12 +206,14 @@ async fn search_memory_with_s3_vectors(
     let memvid_client = MemvidClient::new(s3_client, bucket.to_string());
 
     // Perform search using S3 Vectors
-    let search_results = memvid_client.search(memory_id, query, limit).await
+    let search_results = memvid_client
+        .search(memory_id, query, limit)
+        .await
         .map_err(|e| format!("S3 Vectors search failed: {}", e))?;
 
     // Convert search results to API format
     let mut api_results = Vec::new();
-    
+
     for result in search_results {
         api_results.push(json!({
             "memoryId": memory_id,
