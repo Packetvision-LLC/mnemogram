@@ -2,24 +2,12 @@ use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_s3::Client as S3Client;
 use lambda_http::{run, service_fn, Body, Error, Request, RequestExt, Response};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use shared::errors::MnemogramError;
 use shared::memvid::{MemvidClient, MemvidSearchResult};
 use std::collections::HashMap;
 use tracing_subscriber::EnvFilter;
-
-#[derive(Deserialize)]
-struct RecallRequest {
-    #[serde(default = "default_limit")]
-    limit: usize,
-    offset: Option<usize>,
-    include_metadata: Option<bool>,
-}
-
-fn default_limit() -> usize {
-    50
-}
 
 #[derive(Serialize)]
 struct RecallResult {
@@ -412,16 +400,10 @@ async fn verify_memory_access(
         .copied()
         .unwrap_or(false);
 
-    let status = memory_item
-        .get("status")
-        .and_then(|v| v.as_s().ok().map(ToString::to_string))
-        .unwrap_or_else(|| "unknown".to_string());
-
     Ok(MemoryInfo {
         memory_id: memory_id.to_string(),
         name,
         vectors_migrated,
-        status,
     })
 }
 
@@ -470,16 +452,10 @@ async fn get_user_memories(
                     .copied()
                     .unwrap_or(false);
 
-                let status = item
-                    .get("status")
-                    .and_then(|v| v.as_s().ok().map(ToString::to_string))
-                    .unwrap_or_else(|| "unknown".to_string());
-
                 memories.push(MemoryInfo {
                     memory_id,
                     name,
                     vectors_migrated,
-                    status,
                 });
 
                 if memories.len() >= max_memories {
