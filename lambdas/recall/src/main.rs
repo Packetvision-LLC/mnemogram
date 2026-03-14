@@ -34,7 +34,6 @@ struct BulkRecallResult {
     total_chunks: usize,
     #[serde(rename = "retrievedChunks")]
     retrieved_chunks: usize,
-    status: String,
     chunks: Vec<RecallResult>,
 }
 
@@ -352,7 +351,6 @@ struct MemoryInfo {
     memory_id: String,
     name: String,
     vectors_migrated: bool,
-    status: String,
 }
 
 /// Verify user has access to memory and get basic info
