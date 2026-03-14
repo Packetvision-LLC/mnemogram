@@ -1,4 +1,4 @@
-use lambda_http::{request::ApiGatewayRequestAuthorizer, Request, RequestExt};
+use lambda_http::{Request, RequestExt};
 
 pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
     let context = event.request_context();
@@ -15,11 +15,13 @@ pub fn extract_user_id_from_context(event: &Request) -> Result<String, String> {
     )
 }
 
-fn extract_user_id_from_authorizer(authorizer: &ApiGatewayRequestAuthorizer) -> Option<String> {
+fn extract_user_id_from_authorizer(
+    authorizer: &lambda_http::aws_lambda_events::event::apigw::ApiGatewayRequestAuthorizer,
+) -> Option<String> {
     authorizer
         .fields
         .get("userId")
-        .and_then(|value| value.as_str())
+        .and_then(|value: &serde_json::Value| value.as_str())
         .map(ToString::to_string)
         .or_else(|| {
             authorizer
