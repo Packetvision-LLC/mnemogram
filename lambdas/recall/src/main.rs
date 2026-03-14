@@ -34,6 +34,7 @@ struct BulkRecallResult {
     total_chunks: usize,
     #[serde(rename = "retrievedChunks")]
     retrieved_chunks: usize,
+    status: String,
     chunks: Vec<RecallResult>,
 }
 
@@ -351,6 +352,7 @@ struct MemoryInfo {
     memory_id: String,
     name: String,
     vectors_migrated: bool,
+    status: String,
 }
 
 /// Verify user has access to memory and get basic info
@@ -402,6 +404,7 @@ async fn verify_memory_access(
         memory_id: memory_id.to_string(),
         name,
         vectors_migrated,
+        status: "ok".to_string(),
     })
 }
 
@@ -454,6 +457,7 @@ async fn get_user_memories(
                     memory_id,
                     name,
                     vectors_migrated,
+                    status: if vectors_migrated { "success".to_string() } else { "migration_pending".to_string() },
                 });
 
                 if memories.len() >= max_memories {
