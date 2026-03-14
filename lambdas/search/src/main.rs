@@ -156,7 +156,8 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
     // Check if memory has been migrated to S3 Vectors
     let vectors_migrated = memory_item
         .get("vectorsMigrated")
-        .and_then(|v| Some(v.as_bool()))
+        .and_then(|v| v.as_bool().ok())
+        .copied()
         .unwrap_or(false);
 
     // Check if memory is ready for search
