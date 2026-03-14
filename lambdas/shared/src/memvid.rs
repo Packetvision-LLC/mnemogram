@@ -390,19 +390,12 @@ impl MemvidClient {
             metadata.insert("stored_at".to_string(), chrono::Utc::now().to_rfc3339());
 
             // Convert metadata to the format expected by S3 Vectors
-            let metadata_json = serde_json::to_string(&metadata).map_err(|e| {
-                MnemogramError::Internal(format!(
-                    "Failed to serialize metadata for chunk {}: {}",
-                    i, e
-                ))
-            })?;
-            let metadata_document: aws_smithy_types::Document =
-                serde_json::from_str(&metadata_json).map_err(|e| {
-                    MnemogramError::Internal(format!(
-                        "Failed to parse metadata for chunk {}: {}",
-                        i, e
-                    ))
-                })?;
+            let metadata_document: aws_smithy_types::Document = aws_smithy_types::Document::Object(
+                metadata
+                    .into_iter()
+                    .map(|(k, v)| (k, aws_smithy_types::Document::String(v)))
+                    .collect(),
+            );
 
             // Create PutInputVector object
             let vector = aws_sdk_s3vectors::types::PutInputVector::builder()
