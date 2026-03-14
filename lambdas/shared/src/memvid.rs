@@ -318,10 +318,11 @@ impl MemvidClient {
             metadata.insert("stored_at".to_string(), chrono::Utc::now().to_rfc3339());
 
             // Convert metadata to the format expected by S3 Vectors
+            let metadata_json = serde_json::to_string(&metadata)
+                .map_err(|e| MnemogramError::Internal(format!("Failed to serialize metadata for chunk {}: {}", i, e)))?;
             let metadata_document: aws_smithy_types::Document = 
-                aws_smithy_types::Document::from_json(&serde_json::to_string(&metadata)
-                    .map_err(|e| MnemogramError::Internal(format!("Failed to serialize metadata for chunk {}: {}", i, e)))?)
-                .map_err(|e| MnemogramError::Internal(format!("Failed to convert metadata for chunk {}: {}", i, e)))?;
+                serde_json::from_str(&metadata_json)
+                    .map_err(|e| MnemogramError::Internal(format!("Failed to parse metadata for chunk {}: {}", i, e)))?;
 
             // Create PutInputVector object
             let vector = aws_sdk_s3vectors::types::PutInputVector::builder()
@@ -427,10 +428,10 @@ impl MemvidClient {
 
     /// Extract field from metadata with fallback options
     fn extract_metadata_field(metadata: Option<&aws_smithy_types::Document>, field_names: &[&str]) -> Option<String> {
-        metadata?.as_object().ok().and_then(|obj: &std::collections::HashMap<String, aws_smithy_types::Document>| {
+        metadata?.as_object().and_then(|obj: &std::collections::HashMap<String, aws_smithy_types::Document>| {
             for field in field_names {
                 if let Some(value) = obj.get(*field) {
-                    if let Ok(s) = value.as_string() {
+                    if let Some(s) = value.as_string() {
                         return Some(s.to_string());
                     }
                 }
