@@ -4,8 +4,6 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
-use shared::errors::MnemogramError;
-use shared::memvid::MemvidClient;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
@@ -71,8 +69,6 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
     // Optional SQS queue for triggering index rebuilds
     let index_rebuild_queue_url = std::env::var("INDEX_REBUILD_QUEUE_URL").ok();
 
-    let _memvid_client = MemvidClient::new(s3_client.clone(), "".to_string()); // bucket will be set per record
-
     // Pre-compile regex outside the loop
     let memory_regex = regex::Regex::new(r"memories/([^/]+)\.mv2$").unwrap();
 
@@ -103,9 +99,6 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
             continue;
         };
 
-        // Create a new memvid client for this bucket
-        let bucket_specific_client = MemvidClient::new(s3_client.clone(), bucket.clone());
-
         // Get frame count and validate the .mv2 file
         let frame_count_result = get_frame_count(&s3_client, &bucket, &key).await;
         let new_frame_count = frame_count_result.unwrap_or(0);
@@ -117,32 +110,16 @@ async fn function_handler(event: LambdaEvent<S3Event>) -> Result<(), Error> {
                 .unwrap_or(0);
 
         // Validate the .mv2 file
-        let validation_result = match bucket_specific_client.validate_mv2_file(&memory_id).await {
-            Ok(is_valid) => {
-                if is_valid {
-                    tracing::info!(
-                        "Successfully validated .mv2 file for memory {} - {} frames",
-                        memory_id,
-                        new_frame_count
-                    );
-                    "valid"
-                } else {
-                    tracing::error!("Invalid .mv2 file format for memory {}", memory_id);
-                    "invalid"
-                }
-            }
-            Err(MnemogramError::S3Error(msg)) => {
-                tracing::error!(
-                    "Failed to validate .mv2 file for memory {}: {}",
-                    memory_id,
-                    msg
-                );
-                "error"
-            }
-            Err(e) => {
-                tracing::error!("Unexpected error validating memory {}: {:?}", memory_id, e);
-                "error"
-            }
+        let validation_result = if new_frame_count > 0 {
+            tracing::info!(
+                "Successfully validated .mv2 file for memory {} - {} frames",
+                memory_id,
+                new_frame_count
+            );
+            "valid"
+        } else {
+            tracing::error!("Invalid .mv2 file format for memory {}", memory_id);
+            "invalid"
         };
 
         // Update the memory record in DynamoDB
